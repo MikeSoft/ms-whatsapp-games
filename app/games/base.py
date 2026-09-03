@@ -60,8 +60,12 @@ class Transport(Protocol):
     partida completa se puede ejecutar sin WAHA ni red.
     """
 
-    async def send_group(self, text: str) -> None:
-        """Publica un mensaje en el grupo de la partida."""
+    async def send_group(self, text: str, *, mentions: list[str] | None = None) -> None:
+        """Publica un mensaje en el grupo de la partida.
+
+        ``mentions`` son los JID a etiquetar; el texto debe contener ya sus
+        tokens ``@<número>`` (ver :mod:`app.games.mentions`).
+        """
         ...
 
     async def send_direct(self, jid: str, text: str) -> None:
@@ -94,8 +98,6 @@ class GameContext:
     checkpointer: Any | None = None
     #: Argumentos libres del comando (``!juego hombreslobo rapido``).
     args: list[str] = field(default_factory=list)
-    #: Nombres conocidos del grupo, para saludar por nombre.
-    known_names: dict[str, str] = field(default_factory=dict)
 
     async def record(
         self,

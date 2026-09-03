@@ -17,6 +17,10 @@ from tests.conftest import GROUP_ID, inbound
 
 pytest.importorskip("fakeredis", reason="fakeredis hace falta para probar RedisInbox")
 
+# Va después del importorskip a propósito: si fakeredis no está instalado, el
+# módulo se salta entero en vez de fallar al importar.
+from fakeredis.aioredis import FakeRedis
+
 SESSION = "s-1"
 JUGADOR = "573001111101@c.us"
 OTRO = "573001111102@c.us"
@@ -27,8 +31,6 @@ def _memory() -> MemoryInbox:
 
 
 def _redis() -> RedisInbox:
-    from fakeredis.aioredis import FakeRedis
-
     return RedisInbox(FakeRedis(decode_responses=True), ttl_seconds=60)
 
 
@@ -110,6 +112,49 @@ async def test_clear_vacia_solo_las_claves_indicadas(inbox):
     assert await inbox.collect(SESSION, timeout=0.05, group=True) == []
     quedan = await inbox.collect(SESSION, timeout=0.05, direct=[JUGADOR])
     assert [m.text for m in quedan] == ["privado"]
+
+
+async def test_un_clear_parcial_no_rompe_la_purga_final(inbox):
+    """Regresión: vaciar sólo el grupo dejaba huérfanos los privados.
+
+    `votacion` limpia únicamente la clave del grupo antes de contar votos. Si
+    ese borrado parcial se lleva el índice de la partida, la purga final ya no
+    encuentra los buzones privados y los deja atrás.
+    """
+    await inbox.push(SESSION, _group_msg("charla del debate"))
+    await inbox.push(SESSION, inbound(JUGADOR, "secreto"))
+
+    await inbox.clear(SESSION, keys=["group"])
+    await inbox.push(SESSION, _group_msg("voto"))
+    await inbox.clear(SESSION)
+
+    assert await inbox.collect(SESSION, timeout=0.05, group=True) == []
+    assert await inbox.collect(SESSION, timeout=0.05, direct=[JUGADOR]) == []
+
+
+async def test_dos_colectores_a_la_vez_no_se_roban_el_aviso(inbox):
+    """Dos esperas sobre la misma partida deben despertar las dos.
+
+    Con un único evento compartido por sesión, el `clear()` de un colector se
+    comía el aviso del otro y éste agotaba su ventana entera.
+    """
+
+    async def llega_tarde():
+        await asyncio.sleep(0.1)
+        await inbox.push(SESSION, _group_msg("para el grupo"))
+        await inbox.push(SESSION, inbound(JUGADOR, "para el privado"))
+
+    loop = asyncio.get_running_loop()
+    inicio = loop.time()
+    _, del_grupo, del_privado = await asyncio.gather(
+        llega_tarde(),
+        inbox.collect(SESSION, timeout=3.0, group=True, stop_when=lambda c: bool(c)),
+        inbox.collect(SESSION, timeout=3.0, direct=[JUGADOR], stop_when=lambda c: bool(c)),
+    )
+
+    assert [m.text for m in del_grupo] == ["para el grupo"]
+    assert [m.text for m in del_privado] == ["para el privado"]
+    assert loop.time() - inicio < 1.5, "ninguno debía esperar su ventana completa"
 
 
 async def test_clear_completo_vacia_todo(inbox):

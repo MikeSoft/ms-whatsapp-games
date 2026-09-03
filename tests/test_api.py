@@ -10,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
+from app.orchestrator.manager import Orchestrator
 from app.waha.client import WahaClient
 from app.waha.models import SentMessage
 from tests.conftest import GROUP_ID, MANAGER, make_settings
@@ -22,7 +23,7 @@ def sent(monkeypatch):
     """Captura todo lo que el servicio intenta enviar por WAHA."""
     outbox: list[tuple[str, str]] = []
 
-    async def fake_send_text(self, chat_id, text, *, reply_to=None):
+    async def fake_send_text(self, chat_id, text, *, reply_to=None, mentions=None):
         outbox.append((chat_id, text))
         return SentMessage(ok=True, chat_id=chat_id, message_id=f"m{len(outbox)}")
 
@@ -222,6 +223,23 @@ def test_cancelar_sin_partida_lo_dice(sent):
     with build_client() as client:
         client.post("/webhooks/waha", json=message_event("!cancelar"))
     assert any("No había ninguna partida" in text for _, text in sent)
+
+
+def test_un_fallo_interno_devuelve_202_y_no_500(sent, monkeypatch):
+    """Un 500 haría que WAHA reintentara la entrega en bucle."""
+
+    async def handle_roto(self, message):
+        raise RuntimeError("algo se rompió por dentro")
+
+    monkeypatch.setattr(Orchestrator, "handle", handle_roto)
+
+    with build_client() as client:
+        response = client.post("/webhooks/waha", json=message_event("!juegos"))
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["ok"] is False
+    assert body["handled"] is False
 
 
 def test_mensajes_repetidos_se_procesan_una_sola_vez(sent):

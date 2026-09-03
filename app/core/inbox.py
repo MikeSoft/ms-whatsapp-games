@@ -19,6 +19,7 @@ from __future__ import annotations
 import abc
 import asyncio
 import json
+from collections import OrderedDict, deque
 from collections.abc import Callable, Iterable, Sequence
 from typing import TYPE_CHECKING
 
@@ -31,6 +32,10 @@ if TYPE_CHECKING:  # pragma: no cover
 log = get_logger("inbox")
 
 GROUP_KEY = "group"
+
+#: Cada cuánto se sondea Redis en el último segundo de una ventana, donde no
+#: se puede usar BLPOP con segundos enteros.
+POLL_INTERVAL = 0.05
 
 
 def _direct_key(jid: str) -> str:
@@ -97,21 +102,39 @@ def _keys(group: bool, direct: Sequence[str]) -> list[str]:
     return keys
 
 
+#: Tope de ``message_id`` recordados por :class:`MemoryInbox`. Sin él, el
+#: conjunto de deduplicación crecería sin límite mientras el servicio viva.
+SEEN_LIMIT = 20_000
+
+
 class MemoryInbox(Inbox):
     """Buzón en memoria para tests y para ejecutar sin Redis."""
 
-    def __init__(self) -> None:
-        self._buffers: dict[str, dict[str, list[InboundMessage]]] = {}
-        self._events: dict[str, asyncio.Event] = {}
-        self._seen: set[str] = set()
-
-    def _event(self, session_id: str) -> asyncio.Event:
-        return self._events.setdefault(session_id, asyncio.Event())
+    def __init__(self, *, seen_limit: int = SEEN_LIMIT) -> None:
+        self._buffers: dict[str, dict[str, deque[InboundMessage]]] = {}
+        # Un evento por *colector*, no uno por sesión: con un evento
+        # compartido, el `clear()` de un colector se comería el aviso de otro
+        # que estuviera esperando en la misma sesión.
+        self._waiters: dict[str, set[asyncio.Event]] = {}
+        self._seen: OrderedDict[str, None] = OrderedDict()
+        self._seen_limit = max(1, seen_limit)
 
     async def push(self, session_id: str, message: InboundMessage) -> None:
         session = self._buffers.setdefault(session_id, {})
-        session.setdefault(key_for(message), []).append(message)
-        self._event(session_id).set()
+        session.setdefault(key_for(message), deque()).append(message)
+        for event in self._waiters.get(session_id, ()):
+            event.set()
+
+    def _drain(self, session_id: str, wanted: Sequence[str]) -> list[InboundMessage]:
+        session = self._buffers.get(session_id)
+        if not session:
+            return []
+        drained: list[InboundMessage] = []
+        for key in wanted:
+            queue = session.get(key)
+            while queue:
+                drained.append(queue.popleft())
+        return drained
 
     async def collect(
         self,
@@ -130,42 +153,42 @@ class MemoryInbox(Inbox):
         deadline = loop.time() + max(0.0, timeout)
         collected: list[InboundMessage] = []
 
-        while True:
-            session = self._buffers.setdefault(session_id, {})
-            drained = False
-            for key in wanted:
-                queue = session.get(key)
-                while queue:
-                    collected.append(queue.pop(0))
-                    drained = True
+        event = asyncio.Event()
+        self._waiters.setdefault(session_id, set()).add(event)
+        try:
+            while True:
+                nuevos = self._drain(session_id, wanted)
+                collected.extend(nuevos)
+                if nuevos and stop_when and stop_when(collected):
+                    return collected
 
-            if drained and stop_when and stop_when(collected):
-                return collected
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    return collected
 
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                return collected
-
-            event = self._event(session_id)
-            event.clear()
-            try:
-                await asyncio.wait_for(event.wait(), timeout=remaining)
-            except TimeoutError:
-                # Última pasada para no perder un mensaje que llegó justo al
-                # expirar la ventana.
-                session = self._buffers.setdefault(session_id, {})
-                for key in wanted:
-                    queue = session.get(key)
-                    while queue:
-                        collected.append(queue.pop(0))
-                return collected
+                event.clear()
+                try:
+                    await asyncio.wait_for(event.wait(), timeout=remaining)
+                except TimeoutError:
+                    # Última pasada: no perder un mensaje que llegó justo al
+                    # expirar la ventana.
+                    collected.extend(self._drain(session_id, wanted))
+                    return collected
+        finally:
+            waiters = self._waiters.get(session_id)
+            if waiters is not None:
+                waiters.discard(event)
+                if not waiters:
+                    self._waiters.pop(session_id, None)
 
     async def clear(self, session_id: str, *, keys: Iterable[str] | None = None) -> None:
         session = self._buffers.get(session_id)
         if session is None:
             return
         if keys is None:
-            session.clear()
+            # Purga total: se suelta también la entrada de la sesión, que si no
+            # se acumularía una por partida jugada.
+            self._buffers.pop(session_id, None)
         else:
             for key in keys:
                 session.pop(key, None)
@@ -173,7 +196,9 @@ class MemoryInbox(Inbox):
     async def mark_seen(self, message_id: str, *, ttl: int = 3600) -> bool:
         if message_id in self._seen:
             return False
-        self._seen.add(message_id)
+        self._seen[message_id] = None
+        while len(self._seen) > self._seen_limit:
+            self._seen.popitem(last=False)
         return True
 
 
@@ -206,7 +231,18 @@ class RedisInbox(Inbox):
         pipe.expire(list_key, self._ttl)
         pipe.sadd(index_key, key)
         pipe.expire(index_key, self._ttl)
-        await pipe.execute()
+        try:
+            await pipe.execute()
+        except Exception as exc:  # noqa: BLE001
+            # El mensaje ya está deduplicado, así que propagar no serviría de
+            # nada: WAHA reintentaría y el reintento se descartaría. Se pierde
+            # este mensaje y se sigue atendiendo el resto.
+            log.error(
+                "inbox.push_failed",
+                session_id=session_id,
+                key=key,
+                error=str(exc),
+            )
 
     async def collect(
         self,
@@ -226,23 +262,34 @@ class RedisInbox(Inbox):
         collected: list[InboundMessage] = []
 
         while True:
+            nuevos = await self._drain(wanted)
+            collected.extend(nuevos)
+            if nuevos and stop_when and stop_when(collected):
+                return collected
+
             remaining = deadline - loop.time()
             if remaining <= 0:
                 return collected
 
-            # BLPOP sólo acepta timeouts con resolución de segundo; se limita
-            # a 1s por iteración para no pasarse del deadline.
-            block = min(1.0, max(0.05, remaining))
+            # BLPOP con timeout fraccionario exige Redis >= 6, así que sólo se
+            # usa con segundos enteros. Para la cola de menos de un segundo se
+            # sondea, que además es el camino que ejercitan los tests.
+            if remaining < 1.0:
+                await asyncio.sleep(min(POLL_INTERVAL, remaining))
+                continue
+
             try:
-                result = await self._redis.blpop(wanted, timeout=block)
+                result = await self._redis.blpop(wanted, timeout=1)
             except Exception as exc:  # noqa: BLE001 - Redis caído no mata la partida
                 log.warning("inbox.blpop_failed", error=str(exc))
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(min(0.5, remaining))
                 continue
 
             if not result:
                 continue
 
+            # BLPOP ya extrajo este mensaje de la lista: hay que quedárselo,
+            # porque nadie más lo va a volver a ver.
             _, raw = result
             message = _decode(raw)
             if message is None:
@@ -251,15 +298,55 @@ class RedisInbox(Inbox):
             if stop_when and stop_when(collected):
                 return collected
 
+    async def _drain(self, list_keys: Sequence[str]) -> list[InboundMessage]:
+        """Vacía de golpe todas las listas indicadas.
+
+        ``LRANGE`` + ``DELETE`` dentro de una transacción saca la lista entera
+        en un solo viaje, en lugar de un ``BLPOP`` por mensaje. Se usa
+        ``LRANGE`` en vez de ``LPOP key count`` porque este último exige
+        Redis >= 6.2.
+        """
+        pipe = self._redis.pipeline()
+        for key in list_keys:
+            pipe.lrange(key, 0, -1)
+            pipe.delete(key)
+        try:
+            results = await pipe.execute()
+        except Exception as exc:  # noqa: BLE001 - Redis caído no mata la partida
+            log.warning("inbox.drain_failed", error=str(exc))
+            return []
+
+        mensajes: list[InboundMessage] = []
+        # Los resultados vienen en pares (lrange, delete) por cada clave.
+        for raw_list in results[::2]:
+            for raw in raw_list or ():
+                message = _decode(raw)
+                if message is not None:
+                    mensajes.append(message)
+        return mensajes
+
     async def clear(self, session_id: str, *, keys: Iterable[str] | None = None) -> None:
         index_key = self._index_key(session_id)
         if keys is None:
             known = await self._redis.smembers(index_key)
-            keys = [k.decode() if isinstance(k, bytes) else str(k) for k in known]
-        list_keys = [self._list_key(session_id, key) for key in keys]
-        if list_keys:
-            await self._redis.delete(*list_keys)
-        await self._redis.delete(index_key)
+            names = [k.decode() if isinstance(k, bytes) else str(k) for k in known]
+            list_keys = [self._list_key(session_id, name) for name in names]
+            if list_keys:
+                await self._redis.delete(*list_keys)
+            await self._redis.delete(index_key)
+            return
+
+        # Purga parcial: se quitan sólo esas listas del índice. Borrar el
+        # índice entero aquí dejaría huérfanas las demás claves de la partida,
+        # que ya no se encontrarían en la purga final.
+        names = list(keys)
+        if not names:
+            return
+        list_keys = [self._list_key(session_id, name) for name in names]
+        pipe = self._redis.pipeline()
+        pipe.delete(*list_keys)
+        pipe.srem(index_key, *names)
+        await pipe.execute()
 
     async def mark_seen(self, message_id: str, *, ttl: int = 3600) -> bool:
         key = f"{self._ns}:seen:{message_id}"

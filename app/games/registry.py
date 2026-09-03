@@ -82,11 +82,3 @@ def specs() -> list[GameSpec]:
 def keys() -> list[str]:
     load_builtin_games()
     return sorted(_REGISTRY)
-
-
-def reset_for_tests() -> None:
-    """Vacía el registro. Sólo para tests."""
-    global _loaded
-    _REGISTRY.clear()
-    _ALIASES.clear()
-    _loaded = False

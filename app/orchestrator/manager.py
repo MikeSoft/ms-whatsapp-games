@@ -17,7 +17,6 @@ esperando a que alguien vote.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -87,31 +86,33 @@ class Orchestrator:
             log.debug("orchestrator.duplicate", message_id=message.message_id)
             return
 
-        if self.store is not None:
-            await self.store.log_inbound(
-                message, game_session_id=self._session_for(message)
-            )
-
         is_manager = message.sender_id == self.settings.manager_jid
         command = parse_command(message.text, prefix=self.settings.command_prefix)
+        session_id = self._session_for(message)
 
-        if command is not None:
-            if is_manager:
-                await self._run_command(command, message)
-            else:
-                log.info(
-                    "orchestrator.command_rejected",
-                    sender=message.sender_id,
-                    command=command.name,
-                )
+        # Encolar va primero y la escritura del histórico después: un voto o un
+        # "Yo" tiene una ventana de segundos, mientras que el registro puede
+        # esperar. Al revés, una escritura en contención (SQLite espera hasta
+        # `busy_timeout`) retrasaría el mensaje hasta perder su turno.
+        if command is None and not message.from_me:
+            # Los mensajes que manda el propio bot no vuelven al juego: eso
+            # sería un bucle de retroalimentación.
+            await self._route_to_games(message)
+
+        if self.store is not None:
+            await self.store.log_inbound(message, game_session_id=session_id)
+
+        if command is None:
             return
 
-        # Los mensajes que manda el propio bot no vuelven al juego: eso sería
-        # un bucle de retroalimentación.
-        if message.from_me:
-            return
-
-        await self._route_to_games(message)
+        if is_manager:
+            await self._run_command(command, message)
+        else:
+            log.info(
+                "orchestrator.command_rejected",
+                sender=message.sender_id,
+                command=command.name,
+            )
 
     async def _route_to_games(self, message: InboundMessage) -> None:
         """Encola el mensaje en las partidas que puedan quererlo."""
@@ -337,9 +338,23 @@ class Orchestrator:
             return result
         finally:
             self._games.pop(group_id, None)
-            if self.settings.purge_inbox_on_finish:
+            await self._cleanup(session_id, result)
+
+    async def _cleanup(self, session_id: str, result: GameResult) -> None:
+        """Cierra el rastro de una partida terminada.
+
+        Cada paso se protege por separado: esto corre dentro de un ``finally``
+        que también se alcanza al cancelar, y ahí un ``await`` puede quedarse a
+        medias. ``cancel()`` vuelve a cerrar la sesión después por ese motivo.
+        """
+        if self.settings.purge_inbox_on_finish:
+            try:
                 await self.inbox.clear(session_id)
-            if self.store is not None:
+            except Exception as exc:  # noqa: BLE001
+                log.warning("orchestrator.purge_failed", session_id=session_id, error=str(exc))
+
+        if self.store is not None:
+            try:
                 await self.store.finish_game_session(
                     session_id,
                     status=result.status,
@@ -348,8 +363,14 @@ class Orchestrator:
                     players=result.players,
                     error=result.error,
                 )
-            if result.status == "finished" and result.summary:
+            except Exception as exc:  # noqa: BLE001
+                log.warning("orchestrator.finish_failed", session_id=session_id, error=str(exc))
+
+        if result.status == "finished" and result.summary:
+            try:
                 await self._notify_manager(f"🏁 `{session_id}`: {result.summary}")
+            except Exception as exc:  # noqa: BLE001
+                log.warning("orchestrator.notify_failed", session_id=session_id, error=str(exc))
 
     async def cancel(self, group_id: str) -> bool:
         """Corta la partida de un grupo. ``True`` si había alguna."""
@@ -358,8 +379,11 @@ class Orchestrator:
             return False
 
         running.task.cancel()
-        with contextlib.suppress(asyncio.CancelledError, Exception):
-            await running.task
+        # `asyncio.wait` espera sin propagar ni el CancelledError ni la
+        # excepción de la tarea. Un `await running.task` dentro de un suppress
+        # se tragaría también una cancelación dirigida a *este* coroutine, que
+        # es justo lo que no se debe silenciar durante un apagado.
+        await asyncio.wait({running.task})
 
         # Después de cancelar, el juego deja el grupo en un estado usable:
         # si la partida murió de noche, el grupo estaba silenciado.

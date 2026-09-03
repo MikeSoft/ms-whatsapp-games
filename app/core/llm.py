@@ -17,6 +17,9 @@ import json
 import re
 from typing import Any
 
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
+
 from app.config import Settings
 from app.logging_conf import get_logger
 
@@ -41,9 +44,9 @@ class LLMClient:
             log.info("llm.disabled", reason=self._disabled_reason)
             return
 
+        # El try cubre la construcción, no el import: una base_url mal formada
+        # o un parámetro que el proveedor no acepte no debe tumbar el arranque.
         try:
-            from langchain_openai import ChatOpenAI
-
             self._model = ChatOpenAI(
                 model=settings.llm_model,
                 base_url=settings.llm_base_url,
@@ -106,8 +109,6 @@ class LLMClient:
     ) -> str | None:
         if self._model is None:
             return None
-
-        from langchain_core.messages import HumanMessage, SystemMessage
 
         model = self._model
         overrides: dict[str, Any] = {}

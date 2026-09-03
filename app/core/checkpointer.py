@@ -11,6 +11,9 @@ from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Any
 
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
 from app.config import Settings
 from app.logging_conf import get_logger
 
@@ -20,14 +23,10 @@ log = get_logger("checkpointer")
 async def open_checkpointer(settings: Settings, stack: AsyncExitStack) -> Any:
     """Abre el checkpointer y lo ata al ciclo de vida de ``stack``."""
     if settings.checkpointer == "memory":
-        from langgraph.checkpoint.memory import MemorySaver
-
         log.info("checkpointer.memory")
         return MemorySaver()
 
     try:
-        from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-
         path = Path(settings.checkpointer_path).expanduser()
         path.parent.mkdir(parents=True, exist_ok=True)
         saver = await stack.enter_async_context(
@@ -38,7 +37,5 @@ async def open_checkpointer(settings: Settings, stack: AsyncExitStack) -> Any:
         return saver
     except Exception as exc:  # noqa: BLE001
         # Perder la persistencia del grafo degrada la depuración, no el juego.
-        from langgraph.checkpoint.memory import MemorySaver
-
         log.error("checkpointer.sqlite_failed", error=str(exc))
         return MemorySaver()

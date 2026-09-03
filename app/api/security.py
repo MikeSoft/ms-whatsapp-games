@@ -39,8 +39,12 @@ def verify_webhook(
     Se normalizan las cabeceras a minúsculas antes de llamar.
     """
     if settings.webhook_shared_secret:
+        # Se comparan bytes: compare_digest con str lanza TypeError si el
+        # secreto lleva algún carácter no ASCII, y eso serían 500 en cadena.
         provided = headers.get(SHARED_SECRET_HEADER, "")
-        if not hmac.compare_digest(provided, settings.webhook_shared_secret):
+        if not hmac.compare_digest(
+            provided.encode("utf-8"), settings.webhook_shared_secret.encode("utf-8")
+        ):
             return False, "secreto compartido inválido"
 
     secret = settings.waha_webhook_hmac_secret
@@ -55,7 +59,9 @@ def verify_webhook(
             return False, f"algoritmo HMAC no soportado: {algo_name}"
 
         expected = hmac.new(secret.encode("utf-8"), body, algorithm).hexdigest()
-        if not hmac.compare_digest(expected, signature.strip().lower()):
+        if not hmac.compare_digest(
+            expected.encode("ascii"), signature.strip().lower().encode("utf-8", "ignore")
+        ):
             return False, "firma HMAC inválida"
 
     return True, "ok"

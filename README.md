@@ -12,6 +12,10 @@ registrarla.
 
 > Atiende **un solo número** de WhatsApp. No es multi-tenant y no pretende serlo.
 
+📐 **Para escribir código**, la referencia es
+[`docs/ARQUITECTURA.md`](docs/ARQUITECTURA.md): qué hay en cada módulo, dónde
+va lo nuevo, los contratos que usa un juego y cómo integrarlo con el agente.
+
 ---
 
 ## Cómo se ve una partida
@@ -42,7 +46,8 @@ Bot     ›  🌙 NOCHE 1 — Se apagan los candiles uno por uno…
 (privado) 🧪 Esta noche los lobos atacaron a Caro. ¿Curar, veneno o nada?
 
 Bot     ›  🌅 AMANECE EL DÍA 1
-           ☠️ Caro fue devorado por los lobos — era 🧑‍🌾 Aldeano
+           ☠️ @Caro fue devorado por los lobos — era 🧑‍🌾 Aldeano
+           Quien haya caído ya no participa: ignorad lo que escriba.
            🔊 El chat está abierto.
 
 Bot     ›  ⚖️ EL JUICIO — tenéis 3 minutos para acusaros.
@@ -240,8 +245,11 @@ Todas las variables están documentadas en `.env.example`. Las que más importan
 | `LLM_PROVIDER` | `deepseek` | `deepseek`, `openai` o `none` |
 | `LLM_API_KEY` | *(vacío)* | Sin clave, la narrativa es estática (el juego funciona igual) |
 | `MANAGE_GROUP_PERMISSIONS` | `true` | Silenciar el grupo de noche (requiere WAHA Plus) |
+| `USE_MENTIONS` | `true` | Etiquetar contactos en el grupo en vez de sólo nombrarlos |
 | `WAHA_WEBHOOK_HMAC_SECRET` | *(vacío)* | Firma de los webhooks |
 | `WAHA_DRY_RUN` | `false` | Escribe los envíos en el log en vez de mandarlos |
+| `WAHA_MAX_RETRIES` | `3` | Reintentos de las consultas a WAHA |
+| `WAHA_SEND_MAX_RETRIES` | `2` | Reintentos de los envíos: menos a propósito (ver más abajo) |
 | `RECRUIT_SECONDS` | `30` | Ventana de inscripciones |
 | `NIGHT_ACTION_SECONDS` | `60` | Ventana de las acciones nocturnas |
 | `DEBATE_SECONDS` | `180` | Duración del debate |
@@ -284,11 +292,64 @@ código pone la mecánica**.
 
 ---
 
+## Se etiqueta, no se nombra
+
+Los mensajes al grupo **etiquetan al contacto** (`@número` más el array
+`mentions` de WAHA) en vez de escribir su nombre. WhatsApp lo muestra como una
+mención real, tocable:
+
+```
+☠️ @Hugo fue devorado por los lobos — era 🧪 Bruja
+Quien haya caído ya no participa: ignorad lo que escriba.
+
+Siguen vivos (7):
+1. @Ana
+2. @Beto
+…
+```
+
+Quita la ambigüedad de los tocayos y de quien no tiene nombre público, y deja
+claro **a quién ignorar** el resto de la partida. Los privados siguen usando
+nombres: en un 1:1 son más legibles, y el jugador necesita reconocer a quién
+señala en su lista de objetivos.
+
+Con `USE_MENTIONS=false` se vuelve a nombres planos, para motores de WAHA que
+no resuelvan menciones.
+
+---
+
+## Nada se cuelga sin límite
+
+Un servicio que dirige una partida por turnos tiene un enemigo claro: quedarse
+esperando para siempre y dejar el grupo silenciado. Los topes que lo evitan:
+
+- **Cada ventana tiene deadline.** El buzón devuelve lo que haya recogido
+  cuando expira el plazo; nunca espera a que alguien conteste.
+- **Los envíos reintentan menos que las consultas** (`WAHA_SEND_MAX_RETRIES`).
+  Van serializados por el rate limit de WhatsApp, así que insistir en un
+  mensaje retrasa a todos los demás. Un privado perdido sólo significa que ese
+  jugador no actúa esa noche; un nodo bloqueado rompe la partida entera.
+- **Los envíos masivos tienen presupuesto con techo absoluto** (60 s). Reparte
+  roles a 24 jugadores en unos 17 s con un WAHA sano, y corta a uno patológico
+  en lugar de multiplicar su latencia por el número de jugadores.
+- **La ambientación es una tarea de fondo que no puede propagar.** Si el
+  narrador falla mientras se espera, se calla y la partida sigue su curso.
+- **`MAX_ROUNDS` cierra una partida abandonada** y el tope de recursión del
+  grafo se eleva solo para no chocar antes de tiempo.
+- **Un fallo dentro de una partida reabre el grupo y avisa al máster**, en vez
+  de dejar a la gente muda esperando una noche que no termina.
+
+Todo esto está cubierto en `tests/test_resiliencia.py`, que ejecuta las rutas
+de fallo: WAHA caído a media partida, transporte lento y serializado, tarea de
+relleno que revienta, Redis que se va y apagado con partida a medias.
+
 ## Añadir un juego nuevo
 
-1. Crea `app/games/<mi_juego>/game.py` con una subclase de `Game`:
+El módulo de juegos es extensible: un juego es una clase con su ficha, y el
+orquestador no hay que tocarlo.
 
 ```python
+# app/games/mi_juego/game.py
 from app.games.base import Game, GameResult, GameSpec
 from app.games.registry import register
 
@@ -313,13 +374,17 @@ class MiJuego(Game):
         return GameResult(status="finished", winner="alguien")
 ```
 
-2. Añade el módulo a `BUILTIN_MODULES` en `app/games/registry.py`.
+Se añade el módulo a `BUILTIN_MODULES` en `app/games/registry.py` y ya está:
+`!juegos` lo lista y `!juego mijuego` lo lanza.
 
-Ya está: `!juegos` lo lista y `!juego mijuego` lo lanza. El contexto
-(`self.ctx`) te da `transport` para hablar, `inbox` para escuchar, `llm` para
-narrar y `store` para dejar traza. Usar LangGraph es opcional — El Hombre Lobo
-lo usa porque tiene fases cíclicas y estado compartido, pero un juego sencillo
-puede ser un bucle.
+El contexto (`self.ctx`) da `transport` para hablar, `inbox` para escuchar con
+plazo, `llm` para narrar y `store` para dejar traza. Usar LangGraph es
+opcional: El Hombre Lobo lo usa porque tiene fases cíclicas y estado
+compartido, pero un juego sencillo puede ser un bucle.
+
+👉 **El paso a paso completo** —estructura del paquete, los cuatro contratos,
+cómo montar el grafo, las reglas que no se negocian y cómo probarlo— está en
+[`docs/ARQUITECTURA.md`](docs/ARQUITECTURA.md).
 
 Para reutilizar el reclutamiento en lenguaje natural, llama a
 `app.games.recruit.select_players`.
@@ -332,7 +397,7 @@ Para reutilizar el reclutamiento en lenguaje natural, llama a
 python3 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
 
-.venv/bin/python -m pytest        # 148 tests
+.venv/bin/python -m pytest        # 300 tests
 .venv/bin/ruff check app tests
 .venv/bin/uvicorn app.main:app --reload
 ```
@@ -369,6 +434,15 @@ desvíe de la que usan los demás tests.
 - **Las encuestas de WhatsApp admiten 12 opciones.** Con mesas más grandes se
   recorta la encuesta, pero los votos por texto siguen aceptando a cualquiera.
 - **Una partida por grupo a la vez.** `!cancelar` la corta.
+- **El buzón de Redis usa `BLPOP` con segundos enteros** para no depender de
+  Redis >= 6 (el último segundo de cada ventana se sondea). Si Redis se cae, el
+  mensaje afectado se pierde con un log de error en vez de tumbar el webhook:
+  propagar no ayudaría, porque el `message_id` ya quedó deduplicado y el
+  reintento de WAHA se descartaría igual.
+- **SQLite corre en modo WAL** con `busy_timeout`, para que el webhook pueda
+  registrar mensajes mientras la partida escribe su traza. Por eso el
+  orquestador encola el mensaje *antes* de escribir el histórico: una escritura
+  en contención no puede retrasar un voto hasta perder su turno.
 - **Reiniciar el servicio corta las partidas en curso.** Los checkpoints del
   grafo quedan en disco para inspección, pero no se reanuda automáticamente:
   las ventanas de tiempo ya habrían expirado. Las partidas que quedaron a medias

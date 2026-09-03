@@ -45,7 +45,7 @@ def orchestrator(monkeypatch):
     outbox: list[tuple[str, str]] = []
     locks: list[bool] = []
 
-    async def fake_send_text(self, chat_id, text, *, reply_to=None):
+    async def fake_send_text(self, chat_id, text, *, reply_to=None, mentions=None):
         outbox.append((chat_id, text))
         return SentMessage(ok=True, chat_id=chat_id, message_id=f"m{len(outbox)}")
 

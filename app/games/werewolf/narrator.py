@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from app.core.llm import LLMClient
@@ -72,9 +73,14 @@ class Narrator:
             self._history = self._history[-12:]
 
 
+#: Asteriscos dobles o más: markdown que WhatsApp no interpreta y muestra tal
+#: cual. Su negrita es ``*palabra*``, con un solo asterisco.
+_DOUBLE_STARS = re.compile(r"\*{2,}")
+
+
 def _tidy(text: str) -> str:
     """Limpia adornos que los modelos añaden por su cuenta."""
-    cleaned = text.strip()
+    cleaned = _DOUBLE_STARS.sub("", text).strip()
     # Comillas envolventes.
     for quote in ('"', "'", "«", "“"):
         if cleaned.startswith(quote):
@@ -82,11 +88,19 @@ def _tidy(text: str) -> str:
     for quote in ('"', "'", "»", "”"):
         if cleaned.endswith(quote):
             cleaned = cleaned[:-1].strip()
-    # Encabezados tipo "Narrador:" o "**Escena**".
-    cleaned = cleaned.lstrip("*# ").strip()
-    for prefix in ("narrador:", "narración:", "escena:"):
-        if cleaned.lower().startswith(prefix):
-            cleaned = cleaned[len(prefix) :].strip()
+    # Encabezados tipo "Narrador:" o "**Escena**". Se limpia el adorno, luego
+    # el encabezado, y otra vez el adorno: un "**Narrador:**" deja los
+    # asteriscos de cierre al quitar el prefijo del medio.
+    for _ in range(2):
+        # Sólo almohadillas de encabezado: un asterisco suelto es la negrita
+        # válida de WhatsApp y no se toca.
+        cleaned = cleaned.lstrip("# ").strip()
+        for prefix in ("narrador:", "narración:", "narracion:", "escena:"):
+            if cleaned.lower().startswith(prefix):
+                cleaned = cleaned[len(prefix) :].strip()
+                break
+        else:
+            break
     if len(cleaned) > MAX_CHARS:
         cut = cleaned[:MAX_CHARS]
         # Corta en la última frase completa para no dejar la idea a medias.

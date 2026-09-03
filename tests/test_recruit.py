@@ -141,6 +141,30 @@ async def test_indices_fuera_de_rango_se_descartan():
 
 
 async def test_sin_nombre_se_usa_el_numero_de_telefono():
+    """Dentro de la partida el número es lo único que identifica a alguien."""
     mensaje = inbound("573001110009@c.us", "Yo", scope=Scope.GROUP, chat_id=GROUP_ID)
     (jugador,) = await select_players([mensaje], llm=FakeLLM(None, available=False))
     assert jugador.name == "573001110009"
+
+
+async def test_al_llm_nunca_se_le_manda_un_telefono():
+    """El modelo decide por número de lista: no necesita datos de contacto.
+
+    Sin nombre público, la etiqueta que viaja al proveedor del LLM es genérica
+    en lugar del teléfono de la persona.
+    """
+    sin_nombre = inbound("573001110009@c.us", "va", scope=Scope.GROUP, chat_id=GROUP_ID)
+    con_nombre = inbound(
+        "573001110010@c.us", "yo", scope=Scope.GROUP, chat_id=GROUP_ID, name="Ana"
+    )
+    llm = FakeLLM({"jugadores": [1, 2]})
+    jugadores = await select_players([sin_nombre, con_nombre], llm=llm)
+
+    prompt = llm.llamadas[0]
+    assert "573001110009" not in prompt
+    assert "573001110010" not in prompt
+    assert "Participante 1" in prompt
+    # El nombre público sí se manda: es lo que hace útil la desambiguación.
+    assert "Ana" in prompt
+    # Y dentro de la partida sigue identificándose por su número.
+    assert [j.name for j in jugadores] == ["573001110009", "Ana"]

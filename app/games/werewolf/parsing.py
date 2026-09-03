@@ -12,7 +12,8 @@ import re
 import unicodedata
 from collections.abc import Sequence
 
-from app.games.werewolf.state import Player
+from app.games.mentions import GroupText
+from app.games.werewolf.state import Player, by_jid, label, tagged_label
 
 #: Formas de apuntarse. Se comprueban tras descartar las negativas.
 _JOIN_PATTERNS = (
@@ -41,6 +42,14 @@ _WITCH_POISON = (
     r"\b(veneno|envenenar|envenena|envenenado|matar|mato|muerte|asesinar|asesino)\b",
 )
 _WITCH_NONE = (r"\b(nada|ninguna|paso|abstengo|nadie|guardo|reservo|no\s+uso)\b",)
+
+
+#: Número de la lista de jugadores ("el 3", "voto por 3.").
+#:
+#: Se descarta el número que forme parte de una expresión mayor: sin esto, un
+#: "3:30" o un "2-1" escritos durante la votación contarían como voto al
+#: jugador 3 o al 2, y un voto falso decide quién muere.
+_LIST_NUMBER = re.compile(r"(?<![\d:\-/])(\d{1,2})(?![\d:\-/])")
 
 
 def normalise(text: str) -> str:
@@ -99,7 +108,7 @@ def parse_player_reference(
                 return player
 
     # 2. Número de la lista.
-    for token in re.findall(r"\b(\d{1,2})\b", norm):
+    for token in _LIST_NUMBER.findall(norm):
         number = int(token)
         for player in pool:
             if player.get("number") == number:
@@ -190,10 +199,16 @@ def tally_votes(votes: dict[str, str]) -> tuple[list[str], int]:
     return [jid for jid, count in counts.items() if count == top], top
 
 
-def votes_breakdown(votes: dict[str, str], players: Sequence[Player]) -> str:
-    """Recuento legible para anunciar al grupo."""
-    from app.games.werewolf.state import by_jid, label
+def votes_breakdown(
+    votes: dict[str, str],
+    players: Sequence[Player],
+    texto: GroupText | None = None,
+) -> str:
+    """Recuento legible para anunciar al grupo.
 
+    Con ``texto`` se etiqueta a los acusados en vez de nombrarlos, y las
+    menciones quedan acumuladas ahí para mandarlas junto al mensaje.
+    """
     counts: dict[str, int] = {}
     for target in votes.values():
         if target:
@@ -202,6 +217,11 @@ def votes_breakdown(votes: dict[str, str], players: Sequence[Player]) -> str:
     lines = []
     for jid, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])):
         player = by_jid(list(players), jid)
-        name = label(player) if player else jid
+        if player is None:
+            name = jid
+        elif texto is not None:
+            name = tagged_label(player, texto)
+        else:
+            name = label(player)
         lines.append(f"• {name}: {count} voto{'s' if count != 1 else ''}")
     return "\n".join(lines) if lines else "• nadie recibió votos"

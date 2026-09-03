@@ -62,10 +62,31 @@ _NEGATIVE_HINTS = (
 
 
 def _display_name(messages: list[InboundMessage]) -> str:
+    """Nombre con el que se muestra a alguien en el grupo.
+
+    Sin nombre público de WhatsApp queda el número, que es lo único que hay
+    para distinguirlo dentro de la partida.
+    """
     for message in reversed(messages):
-        if message.sender_name:
+        if message.sender_name and message.sender_name.strip():
             return message.sender_name.strip()
-    return messages[0].sender_id.split("@", 1)[0]
+    # Sin nombre público queda el número. Un JID raro (por ejemplo "@lid") no
+    # deja nada usable, y un nombre vacío rompería las listas de la partida.
+    numero = messages[0].sender_id.split("@", 1)[0].strip()
+    return numero or "Jugador anónimo"
+
+
+def _prompt_label(index: int, messages: list[InboundMessage]) -> str:
+    """Etiqueta que se le manda al LLM, sin datos de contacto.
+
+    El modelo elige por número de lista, así que no necesita el teléfono de
+    nadie: cuando no hay nombre público se manda una etiqueta genérica en vez
+    del número.
+    """
+    for message in reversed(messages):
+        if message.sender_name and message.sender_name.strip():
+            return message.sender_name.strip()
+    return f"Participante {index}"
 
 
 def _group_by_sender(messages: list[InboundMessage]) -> dict[str, list[InboundMessage]]:
@@ -135,7 +156,7 @@ async def _ask_llm(
     lines = []
     for index, jid in enumerate(senders, start=1):
         said = " | ".join(m.text.strip() for m in grouped[jid] if m.text.strip())
-        lines.append(f"{index}. {_display_name(grouped[jid])} dijo: {said}")
+        lines.append(f"{index}. {_prompt_label(index, grouped[jid])} dijo: {said}")
 
     user = (
         "Participantes posibles y lo que escribieron:\n"

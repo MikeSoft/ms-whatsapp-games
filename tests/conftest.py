@@ -34,13 +34,16 @@ class FakeTransport:
     direct_messages: list[tuple[str, str]] = field(default_factory=list)
     polls: list[tuple[str, list[str]]] = field(default_factory=list)
     lock_history: list[bool] = field(default_factory=list)
+    #: Los JID etiquetados en cada mensaje de grupo, en el mismo orden.
+    group_mentions: list[list[str]] = field(default_factory=list)
     poll_supported: bool = True
 
     on_group: Callable[[str], Awaitable[None]] | None = None
     on_direct: Callable[[str, str], Awaitable[None]] | None = None
 
-    async def send_group(self, text: str) -> None:
+    async def send_group(self, text: str, *, mentions: list[str] | None = None) -> None:
         self.group_messages.append(text)
+        self.group_mentions.append(list(mentions or []))
         if self.on_group is not None:
             await self.on_group(text)
 
@@ -73,6 +76,14 @@ class FakeTransport:
     def dms_matching(self, pattern: str) -> list[tuple[str, str]]:
         return [(jid, text) for jid, text in self.direct_messages if pattern in text]
 
+    def group_matching(self, pattern: str) -> list[tuple[str, list[str]]]:
+        """Mensajes de grupo que contienen ``pattern``, con sus menciones."""
+        return [
+            (text, mentions)
+            for text, mentions in zip(self.group_messages, self.group_mentions, strict=True)
+            if pattern in text
+        ]
+
 
 def inbound(
     sender: str,
@@ -96,6 +107,20 @@ def inbound(
         kind="poll_vote" if poll_options else "text",
         poll_options=poll_options or [],
     )
+
+
+def render_mentions(text: str, names: dict[str, str]) -> str:
+    """Sustituye los tokens ``@<número>`` por el nombre del contacto.
+
+    Es lo que hace el cliente de WhatsApp al mostrar una mención, así que los
+    jugadores automáticos leen los mensajes del grupo igual que una persona.
+    """
+    rendered = text
+    for jid, nombre in names.items():
+        digits = "".join(ch for ch in jid.split("@", 1)[0] if ch.isdigit())
+        if digits:
+            rendered = rendered.replace(f"@{digits}", nombre)
+    return rendered
 
 
 def fast_timers() -> Timers:
@@ -182,9 +207,6 @@ class ScriptedPlayers:
     roles: dict[str, str] = field(default_factory=dict)
     joined: bool = False
 
-    def role_of(self, jid: str) -> str | None:
-        return self.roles.get(jid)
-
     def wolves(self) -> list[str]:
         return [jid for jid, role in self.roles.items() if role == "Hombre Lobo"]
 
@@ -201,7 +223,8 @@ class ScriptedPlayers:
             inbound(jid, text, scope=Scope.GROUP, name=self.names.get(jid)),
         )
 
-    async def on_group(self, text: str) -> None:
+    async def on_group(self, raw: str) -> None:
+        text = render_mentions(raw, self.names)
         if "se abren las inscripciones" in text and not self.joined:
             self.joined = True
             for jid in self.jids:

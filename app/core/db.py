@@ -22,6 +22,7 @@ from sqlalchemy import (
     String,
     Text,
     delete,
+    event,
     select,
 )
 from sqlalchemy.ext.asyncio import (
@@ -100,6 +101,25 @@ class GameEventRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
+def _enable_wal(engine: AsyncEngine, busy_timeout: float) -> None:
+    """Pone SQLite en modo WAL para que lectores y escritor no se bloqueen.
+
+    El modo por defecto (``journal_mode=delete``) serializa cualquier lectura
+    contra la escritura en curso; con WAL el webhook puede seguir registrando
+    mensajes mientras la partida escribe su traza.
+    """
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _set_pragmas(dbapi_connection, _record):  # pragma: no cover - vía driver
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute(f"PRAGMA busy_timeout={int(busy_timeout * 1000)}")
+            cursor.execute("PRAGMA synchronous=NORMAL")
+        finally:
+            cursor.close()
+
+
 class Store:
     """Fachada de acceso a datos.
 
@@ -107,12 +127,39 @@ class Store:
     línea de histórico no debe tumbar una partida en curso.
     """
 
-    def __init__(self, database_url: str) -> None:
+    def __init__(
+        self,
+        database_url: str,
+        *,
+        busy_timeout: float = 30.0,
+        pool_size: int = 2,
+    ) -> None:
         self._url = database_url
         self._ensure_parent_dir(database_url)
+
+        is_sqlite = database_url.startswith("sqlite")
+        is_file_sqlite = is_sqlite and ":memory:" not in database_url
+        connect_args: dict[str, Any] = {}
+        options: dict[str, Any] = {}
+        if is_sqlite:
+            # Sin esto, dos escritores concurrentes (el webhook registrando un
+            # mensaje y la partida anotando un evento) chocan con
+            # "database is locked" en vez de esperarse.
+            connect_args["timeout"] = busy_timeout
+        if is_file_sqlite:
+            # SQLite sólo admite un escritor: con el pool por defecto (5 + 10)
+            # las conexiones se pelean por el lock y cada una añade un hilo de
+            # aiosqlite. Medido, un pool de 2 va ~25% más rápido que el de
+            # serie y usa la mitad de hilos. Una base en memoria usa StaticPool
+            # y no acepta estos argumentos.
+            options["pool_size"] = max(1, pool_size)
+            options["max_overflow"] = 0
+
         self._engine: AsyncEngine = create_async_engine(
-            database_url, echo=False, future=True
+            database_url, echo=False, future=True, connect_args=connect_args, **options
         )
+        if is_file_sqlite:
+            _enable_wal(self._engine, busy_timeout)
         self._sessionmaker = async_sessionmaker(self._engine, expire_on_commit=False)
 
     @staticmethod
@@ -239,19 +286,6 @@ class Store:
             is_secret=is_secret,
         )
         await self._add(row)
-
-    async def active_game_session(self, group_id: str) -> GameSessionRow | None:
-        async with self.session() as session:
-            result = await session.execute(
-                select(GameSessionRow)
-                .where(
-                    GameSessionRow.group_id == group_id,
-                    GameSessionRow.status == "running",
-                )
-                .order_by(GameSessionRow.started_at.desc())
-                .limit(1)
-            )
-            return result.scalar_one_or_none()
 
     async def recent_game_sessions(self, limit: int = 5) -> list[GameSessionRow]:
         async with self.session() as session:

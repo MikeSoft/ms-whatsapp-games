@@ -85,7 +85,7 @@ async def test_el_cazador_dispara_al_morir():
     hunter = players[1]
 
     # El cazador elige al jugador 1 en su último aliento.
-    async def fake_ask(victim, current):
+    async def fake_ask(victim, current, *, session_id=None):
         return players[0]["jid"] if victim["jid"] == hunter["jid"] else None
 
     nodes._ask_hunter = fake_ask  # type: ignore[method-assign]
@@ -109,7 +109,7 @@ async def test_cadena_cazador_mas_amor_no_entra_en_bucle():
     ]
     lovers = [players[2]["jid"], players[3]["jid"]]
 
-    async def fake_ask(victim, current):
+    async def fake_ask(victim, current, *, session_id=None):
         return players[2]["jid"]
 
     nodes._ask_hunter = fake_ask  # type: ignore[method-assign]

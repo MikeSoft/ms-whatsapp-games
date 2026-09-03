@@ -29,16 +29,18 @@ class WahaTransport:
         self._store = store
         self._session_id = session_id
 
-    async def send_group(self, text: str) -> None:
-        await self._send(self._group_id, text)
+    async def send_group(self, text: str, *, mentions: list[str] | None = None) -> None:
+        await self._send(self._group_id, text, mentions=mentions)
 
     async def send_direct(self, jid: str, text: str) -> None:
         await self._send(jid, text)
 
-    async def _send(self, chat_id: str, text: str) -> None:
+    async def _send(
+        self, chat_id: str, text: str, *, mentions: list[str] | None = None
+    ) -> None:
         if not text or not text.strip():
             return
-        result = await self._client.send_text(chat_id, text)
+        result = await self._client.send_text(chat_id, text, mentions=mentions)
         if not result.ok:
             log.warning("transport.send_failed", chat_id=chat_id, error=result.error)
             return

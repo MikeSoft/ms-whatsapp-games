@@ -3,12 +3,24 @@
 from __future__ import annotations
 
 import random
+import re
 
 import pytest
 
+from app.core.inbox import MemoryInbox
 from app.games.werewolf.game import WerewolfGame
+from app.games.werewolf.nodes import Timers, WerewolfNodes
 from app.games.werewolf.roles import Role
-from tests.conftest import fast_timers, make_settings
+from app.games.werewolf.state import initial_state
+from tests.conftest import (
+    GROUP_ID,
+    FakeTransport,
+    fast_timers,
+    inbound,
+    make_context,
+    make_settings,
+    render_mentions,
+)
 
 VALID_WINNERS = {"lobos", "pueblo", "enamorados", "nadie"}
 
@@ -172,17 +184,175 @@ async def test_mesa_grande_ejercita_todos_los_roles_especiales(table, seed):
         assert len(lobos) >= len(vivos) - len(lobos)
 
 
+async def test_el_historial_narrativo_queda_en_el_estado_del_grafo(table):
+    """`narrative_log` acumula lo publicado al grupo, sin el relleno de espera.
+
+    Es una clave acumulativa del estado: si ningún nodo la devolviera, el
+    checkpoint no serviría para releer la partida.
+    """
+    ctx, transport, _inbox, _script = table(6)
+    game = WerewolfGame(ctx, timers=fast_timers())
+    await game.run()
+
+    historial = game.last_state.get("narrative_log", [])
+    assert historial, "el estado tenía que acumular la narración"
+    # Es exactamente lo enviado al grupo, en orden.
+    assert historial == transport.group_messages
+    assert any("EL HOMBRE LOBO" in linea for linea in historial)
+    assert any("Todos los roles" in linea for linea in historial)
+
+
 async def test_roles_no_se_filtran_al_grupo_durante_la_partida(table):
     """Ningún rol secreto se anuncia en el grupo antes del cierre."""
     _, transport, script, _ = await _play(table, 8)
 
-    # Todo lo enviado al grupo salvo el mensaje final de revelación.
-    durante = "\n".join(transport.group_messages[:-1])
+    # Todo lo enviado al grupo salvo el mensaje final de revelación, leído
+    # como lo ve la gente: los tokens de mención resueltos a nombres.
+    durante = "\n".join(
+        render_mentions(m, script.names) for m in transport.group_messages[:-1]
+    )
     for jid, role in script.roles.items():
         nombre = script.names[jid]
-        if role == "Hombre Lobo":
-            # No puede aparecer "Jugador3 ... Hombre Lobo" fuera de las muertes,
-            # que sí revelan el rol por diseño.
-            for linea in durante.splitlines():
-                if nombre in linea and "Hombre Lobo" in linea:
-                    assert linea.lstrip().startswith("☠️"), linea
+        if role != "Hombre Lobo":
+            continue
+        # No puede aparecer "Jugador3 ... Hombre Lobo" fuera de las muertes,
+        # que sí revelan el rol por diseño. Con límites de palabra, para que
+        # "Jugador1" no se confunda con "Jugador10".
+        for linea in durante.splitlines():
+            if re.search(rf"\b{re.escape(nombre)}\b", linea) and "Hombre Lobo" in linea:
+                assert linea.lstrip().startswith("☠️"), linea
+
+
+# =====================================================================
+# Coreografía de las tools de WAHA
+# =====================================================================
+async def test_cada_tool_de_waha_se_usa_en_su_fase(table):
+    """El agente no sólo llama a las tools: las llama cuando toca.
+
+    Es la parte que un test de "termina bien" no cubre. Se comprueba el orden
+    real de las operaciones contra WAHA a lo largo de una partida entera.
+    """
+    ctx, transport, _inbox, _script = table(8)
+    game = WerewolfGame(ctx, timers=fast_timers())
+    result = await game.run()
+    assert result.status == "finished"
+
+    jugadores = {p["jid"] for p in result.players}
+
+    # 1. El grupo se silencia ANTES de repartir roles: si se reparte con el
+    #    chat abierto, alguien comenta su rol y la partida está arruinada.
+    primer_lock = transport.lock_history.index(True)
+    assert primer_lock == 0, "el primer cambio de permisos tiene que ser silenciar"
+
+    # 2. Cada jugador recibe su rol por privado, y sólo el suyo.
+    role_dms = transport.dms_matching("Tu rol es")
+    assert {jid for jid, _ in role_dms} == jugadores
+    assert len(role_dms) == len(jugadores)
+
+    # 3. Las peticiones nocturnas van sólo a quien tiene poder, nunca al grupo.
+    for marca in ("¿A quién devoráis?", "conocer la identidad", "Pociones que te quedan"):
+        assert marca not in transport.group_text(), f"{marca!r} se filtró al grupo"
+
+    # 4. El grupo se reabre en el amanecer, antes del debate y la votación.
+    grupo = transport.group_messages
+    indice_amanecer = next(i for i, m in enumerate(grupo) if "AMANECE EL DÍA" in m)
+    indice_votacion = next(i for i, m in enumerate(grupo) if "*VOTACIÓN*" in m)
+    assert indice_amanecer < indice_votacion
+    assert False in transport.lock_history, "el chat tenía que reabrirse"
+
+    # 5. La encuesta se publica en la fase de votación, con los vivos de ese
+    #    momento y dentro del límite de WhatsApp.
+    assert transport.polls
+    for pregunta, opciones in transport.polls:
+        assert "linchamos" in pregunta
+        assert 2 <= len(opciones) <= 12
+        assert len(set(opciones)) == len(opciones), "opciones repetidas"
+
+    # 6. Se cierra con el chat abierto: nadie se queda mudo tras la partida.
+    assert transport.lock_history[-1] is False
+
+
+async def test_el_orden_de_los_privados_de_la_noche_es_el_correcto(table):
+    """La bruja se consulta DESPUÉS de los lobos.
+
+    Necesita saber a quién atacaron para decidir si cura, así que su ventana
+    no puede abrirse en paralelo con la de la manada.
+    """
+    _, transport, _script, _ = await _play(table, 8, witch_reply="curar")
+
+    privados = [texto for _, texto in transport.direct_messages]
+    primer_lobo = next(
+        (i for i, t in enumerate(privados) if "¿A quién devoráis?" in t), None
+    )
+    primera_bruja = next(
+        (i for i, t in enumerate(privados) if "Pociones que te quedan" in t), None
+    )
+    assert primer_lobo is not None and primera_bruja is not None
+    assert primer_lobo < primera_bruja, "la bruja se consultó antes que los lobos"
+
+    # Y se le dice a quién atacaron, que es el dato que necesita.
+    consulta = privados[primera_bruja]
+    assert "los lobos" in consulta
+
+
+async def test_el_cazador_se_consulta_al_morir_y_solo_entonces():
+    """Su privado llega en el momento de su muerte, no al repartir roles.
+
+    Se fuerza su linchamiento en vez de esperar que el azar lo mate: así el
+    test comprueba siempre lo que dice comprobar.
+    """
+    transport = FakeTransport()
+    inbox = MemoryInbox()
+    ctx = make_context(transport=transport, inbox=inbox, session_id="s-caz")
+    nodes = WerewolfNodes(
+        ctx, timers=Timers(hunter=0.3, filler_interval=0.0), rng=random.Random(1)
+    )
+
+    def _jugador(numero: int, rol: Role) -> dict:
+        return {
+            "jid": f"5730044444{numero:02d}@c.us",
+            "name": f"J{numero}",
+            "number": numero,
+            "role": str(rol),
+            "alive": True,
+            "death_round": None,
+            "death_cause": None,
+        }
+
+    players = [
+        _jugador(1, Role.LOBO),
+        _jugador(2, Role.CAZADOR),
+        _jugador(3, Role.ALDEANO),
+        _jugador(4, Role.ALDEANO),
+        _jugador(5, Role.ALDEANO),
+    ]
+    cazador = players[1]["jid"]
+
+    # Antes de morir no se le pregunta nada.
+    assert transport.dms_matching("Acabas de morir") == []
+
+    async def responde(jid, text):
+        if "Acabas de morir" in text:
+            await inbox.push("s-caz", inbound(jid, "1"))  # se lleva al lobo
+
+    transport.on_direct = responde
+
+    estado = dict(initial_state("s-caz", GROUP_ID))
+    estado["players"] = players
+    estado["round_no"] = 2
+    estado["votes"] = {p["jid"]: cazador for p in players if p["jid"] != cazador}
+
+    updates = await nodes.veredicto(estado)
+
+    # 1. Se le preguntó, y sólo a él.
+    disparos = transport.dms_matching("Acabas de morir")
+    assert [jid for jid, _ in disparos] == [cazador]
+
+    # 2. Su disparo se resolvió: el lobo se fue con él.
+    resultado = {p["jid"]: p for p in updates["players"]}
+    assert resultado[cazador]["death_cause"] == "linchamiento"
+    assert resultado[players[0]["jid"]]["death_cause"] == "cazador"
+
+    # 3. El grupo se enteró de las dos muertes.
+    anuncio = transport.group_messages[-1]
+    assert anuncio.count("☠️") == 2

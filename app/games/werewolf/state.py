@@ -13,7 +13,8 @@ from __future__ import annotations
 import operator
 from typing import Annotated, Any, Literal, TypedDict
 
-from app.games.werewolf.roles import Role, Team, info, team_of
+from app.games.mentions import GroupText
+from app.games.werewolf.roles import Role, info
 
 Phase = Literal[
     "reclutamiento",
@@ -64,8 +65,10 @@ class WerewolfState(TypedDict, total=False):
     votes: dict[str, str]
 
     # --------------------------------------------------------------- narrativa
+    #: Todo lo narrado al grupo, en orden. Es una clave acumulativa: los nodos
+    #: devuelven **sólo lo nuevo** y LangGraph lo concatena. Queda dentro del
+    #: checkpoint, así que sirve para releer una partida ya jugada.
     narrative_log: Annotated[list[str], operator.add]
-    events: Annotated[list[dict[str, Any]], operator.add]
 
     # ------------------------------------------------------------------- final
     winner: str | None
@@ -91,7 +94,6 @@ def initial_state(session_id: str, group_id: str) -> WerewolfState:
         lynched=None,
         votes={},
         narrative_log=[],
-        events=[],
         winner=None,
         finished=False,
         abort_reason=None,
@@ -102,10 +104,6 @@ def initial_state(session_id: str, group_id: str) -> WerewolfState:
 # --------------------------------------------------------------------- lecturas
 def alive(players: list[Player]) -> list[Player]:
     return [p for p in players if p.get("alive", True)]
-
-
-def dead(players: list[Player]) -> list[Player]:
-    return [p for p in players if not p.get("alive", True)]
 
 
 def by_jid(players: list[Player], jid: str) -> Player | None:
@@ -125,11 +123,6 @@ def wolves(players: list[Player], *, only_alive: bool = True) -> list[Player]:
     return with_role(players, Role.LOBO, only_alive=only_alive)
 
 
-def villagers(players: list[Player], *, only_alive: bool = True) -> list[Player]:
-    pool = alive(players) if only_alive else players
-    return [p for p in pool if team_of(p.get("role", Role.ALDEANO)) is Team.PUEBLO]
-
-
 def label(player: Player) -> str:
     """``"3. Ana"`` — la etiqueta que ven los jugadores."""
     return f"{player.get('number', '?')}. {player.get('name', 'anónimo')}"
@@ -138,6 +131,30 @@ def label(player: Player) -> str:
 def roster_lines(players: list[Player], *, only_alive: bool = True) -> str:
     pool = alive(players) if only_alive else players
     return "\n".join(label(p) for p in sorted(pool, key=lambda p: p.get("number", 0)))
+
+
+# --------------------------------------------------- versiones con etiqueta
+# Los mensajes al grupo etiquetan al contacto en vez de sólo nombrarlo: así se
+# ve de quién se habla incluso si dos jugadores tienen nombres parecidos, y
+# quién ha quedado fuera. En los privados se siguen usando nombres, que son
+# más legibles cuando hay que reconocer a alguien en una lista.
+def tag(player: Player, texto: GroupText) -> str:
+    """Etiqueta a un jugador, cayendo a su nombre si están desactivadas."""
+    return texto.tag(player.get("jid", ""), player.get("name", "anónimo"))
+
+
+def tagged_label(player: Player, texto: GroupText) -> str:
+    """``"3. @573001234567"`` — la etiqueta de lista con mención."""
+    return f"{player.get('number', '?')}. {tag(player, texto)}"
+
+
+def tagged_roster(
+    players: list[Player], texto: GroupText, *, only_alive: bool = True
+) -> str:
+    pool = alive(players) if only_alive else players
+    return "\n".join(
+        tagged_label(p, texto) for p in sorted(pool, key=lambda p: p.get("number", 0))
+    )
 
 
 def poll_options(players: list[Player]) -> list[str]:
@@ -173,14 +190,24 @@ def kill(
 
 
 def role_title(player: Player) -> str:
-    details = info(player.get("role", Role.ALDEANO))
+    """Rol para mostrar. Tolerante: es una función de presentación.
+
+    Un rol desconocido (estado corrupto, checkpoint de una versión anterior)
+    no puede reventar el mensaje final y dejar el grupo silenciado.
+    """
+    raw = player.get("role") or Role.ALDEANO
+    try:
+        details = info(raw)
+    except ValueError:
+        return f"❓ {raw}"
     return f"{details.emoji} {details.title}"
 
 
-def public_summary(players: list[Player]) -> str:
+def public_summary(players: list[Player], texto: GroupText | None = None) -> str:
     """Revelación final de todos los roles, para cerrar la partida."""
     lines = []
     for player in sorted(players, key=lambda p: p.get("number", 0)):
         estado = "sobrevivió" if player.get("alive", True) else "murió"
-        lines.append(f"{label(player)} — {role_title(player)} ({estado})")
+        etiqueta = tagged_label(player, texto) if texto is not None else label(player)
+        lines.append(f"{etiqueta} — {role_title(player)} ({estado})")
     return "\n".join(lines)

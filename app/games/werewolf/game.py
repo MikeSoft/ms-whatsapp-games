@@ -43,6 +43,10 @@ from app.logging_conf import get_logger
 
 log = get_logger("werewolf.game")
 
+#: Nodos que recorre una ronda completa (noche, resolución, amanecer,
+#: evaluación, debate, votación, veredicto y la segunda evaluación).
+NODES_PER_ROUND = 9
+
 
 def build_graph(nodes: WerewolfNodes, *, checkpointer: Any | None = None):
     """Construye y compila el grafo de la partida."""
@@ -130,16 +134,27 @@ class WerewolfGame(Game):
             rng=rng,
         )
         self._graph = build_graph(self.nodes, checkpointer=ctx.checkpointer)
+        #: Estado final del grafo, disponible tras :meth:`run` para inspección.
+        self.last_state: dict[str, Any] = {}
 
     async def run(self) -> GameResult:
         state = initial_state(self.ctx.session_id, self.ctx.group_id)
+        # El grafo recorre ~9 nodos por ronda. Si el tope configurado se
+        # quedara corto para MAX_ROUNDS, la partida moriría con un
+        # GraphRecursionError en vez de cerrarse por tablas, así que se toma
+        # el mayor de los dos.
+        limite = max(
+            self.ctx.settings.graph_recursion_limit,
+            NODES_PER_ROUND * (self.ctx.settings.max_rounds + 1) + 10,
+        )
         config: dict[str, Any] = {
             "configurable": {"thread_id": self.ctx.session_id},
-            "recursion_limit": self.ctx.settings.graph_recursion_limit,
+            "recursion_limit": limite,
         }
 
         final_state: dict[str, Any] = await self._graph.ainvoke(state, config=config)
 
+        self.last_state = final_state
         players = [dict(player) for player in final_state.get("players", [])]
         winner = final_state.get("winner")
         abort_reason = final_state.get("abort_reason")

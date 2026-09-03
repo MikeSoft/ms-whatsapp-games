@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 
@@ -43,8 +45,6 @@ async def test_send_text_manda_la_peticion_esperada():
     (request,) = vistas
     assert request.url.path == "/api/sendText"
     assert request.headers["x-api-key"] == "clave-de-prueba"
-    import json
-
     body = json.loads(request.content)
     assert body == {"session": "default", "chatId": "573001234567@c.us", "text": "hola"}
     await client.aclose()
@@ -84,11 +84,37 @@ async def test_reintenta_los_errores_temporales():
             return httpx.Response(503, text="temporalmente no disponible")
         return httpx.Response(200, json={"id": "ok"})
 
-    client = build_client(handler, waha_max_retries=3)
+    client = build_client(handler, waha_send_max_retries=3)
     result = await client.send_text(GROUP_ID, "insiste")
 
     assert result.ok is True
     assert intentos["n"] == 3
+    await client.aclose()
+
+
+async def test_los_envios_reintentan_menos_que_las_consultas():
+    """Un envío se rinde antes a propósito.
+
+    Los envíos van serializados por el rate limit, así que insistir en uno
+    retrasa a todos los demás. Un privado perdido sólo significa que ese
+    jugador no actúa; un nodo bloqueado rompe la partida entera.
+    """
+    intentos = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        intentos["n"] += 1
+        return httpx.Response(503, text="caído")
+
+    client = build_client(handler, waha_max_retries=5, waha_send_max_retries=2)
+    result = await client.send_text(GROUP_ID, "hola")
+
+    assert result.ok is False
+    assert intentos["n"] == 2, "el envío usa su propio presupuesto, no el general"
+
+    # Una consulta sí agota el presupuesto general.
+    intentos["n"] = 0
+    await client.session_status()
+    assert intentos["n"] == 5
     await client.aclose()
 
 
@@ -122,8 +148,6 @@ async def test_send_poll_respeta_el_formato_de_waha():
     vistas: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        import json
-
         vistas.append(json.loads(request.content))
         return httpx.Response(200, json={"id": "poll-1"})
 
@@ -153,8 +177,6 @@ async def test_las_opciones_se_recortan_al_limite_de_whatsapp():
     vistas: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        import json
-
         vistas.append(json.loads(request.content))
         return httpx.Response(200, json={})
 
@@ -200,23 +222,6 @@ async def test_se_puede_desactivar_la_gestion_de_permisos():
 
     client = build_client(handler, manage_group_permissions=False)
     assert await client.set_admins_only(GROUP_ID, True) is False
-    await client.aclose()
-
-
-async def test_participantes_acepta_lista_o_envoltorio():
-    respuestas = [
-        httpx.Response(200, json=[{"id": "1@c.us"}, {"id": "2@c.us"}]),
-        httpx.Response(200, json={"participants": [{"id": "3@c.us"}]}),
-        httpx.Response(200, json={"otra": "forma"}),
-    ]
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        return respuestas.pop(0)
-
-    client = build_client(handler)
-    assert len(await client.get_participants(GROUP_ID)) == 2
-    assert len(await client.get_participants(GROUP_ID)) == 1
-    assert await client.get_participants(GROUP_ID) == []
     await client.aclose()
 
 

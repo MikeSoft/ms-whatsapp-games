@@ -54,15 +54,16 @@ def scope_for(chat_id: str) -> Scope:
 
 
 def _extract_name(payload: dict[str, Any]) -> str | None:
-    data = payload.get("_data") if isinstance(payload.get("_data"), dict) else {}
+    raw = payload.get("_data")
+    data: dict[str, Any] = raw if isinstance(raw, dict) else {}
+
     candidates: list[Any] = []
     for key in _NAME_KEYS:
         candidates.append(payload.get(key))
-        candidates.append(data.get(key) if isinstance(data, dict) else None)
-    candidates.append(_dig(payload, "_data", "notifyName"))
+        candidates.append(data.get(key))
     candidates.append(_dig(payload, "contact", "pushname"))
-    name = _first_str(*candidates)
-    return name or None
+
+    return _first_str(*candidates) or None
 
 
 def _extract_text(payload: dict[str, Any]) -> str:

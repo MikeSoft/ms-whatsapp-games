@@ -66,13 +66,14 @@ class WahaClient:
         path: str,
         *,
         json: dict[str, Any] | None = None,
+        attempts: int | None = None,
     ) -> Any:
         """Ejecuta una petición con reintentos exponenciales.
 
         Devuelve el cuerpo decodificado (``None`` si la respuesta vino vacía)
         y lanza :class:`WahaError` cuando la petición no se puede completar.
         """
-        attempts = max(1, self._settings.waha_max_retries)
+        attempts = max(1, attempts or self._settings.waha_max_retries)
         last_error: Exception | None = None
 
         for attempt in range(1, attempts + 1):
@@ -138,10 +139,22 @@ class WahaClient:
         self._last_send_at = loop.time()
 
     # ----------------------------------------------------------------- envío
-    async def send_text(self, chat_id: str, text: str, *, reply_to: str | None = None) -> SentMessage:
-        """Envía un mensaje de texto a un chat (grupo o privado)."""
+    async def send_text(
+        self,
+        chat_id: str,
+        text: str,
+        *,
+        reply_to: str | None = None,
+        mentions: list[str] | None = None,
+    ) -> SentMessage:
+        """Envía un mensaje de texto a un chat (grupo o privado).
+
+        ``mentions`` son los JID a etiquetar. WhatsApp sólo los resuelve si el
+        texto contiene además su ``@<número>``, de lo que se encarga
+        :class:`~app.games.mentions.GroupText`.
+        """
         if self._settings.waha_dry_run:
-            log.info("waha.dry_run.send_text", chat_id=chat_id, text=text)
+            log.info("waha.dry_run.send_text", chat_id=chat_id, text=text, mentions=mentions)
             return SentMessage(ok=True, chat_id=chat_id, message_id="dry-run")
 
         payload: dict[str, Any] = {
@@ -151,11 +164,18 @@ class WahaClient:
         }
         if reply_to:
             payload["reply_to"] = reply_to
+        if mentions:
+            payload["mentions"] = mentions
 
         async with self._send_lock:
             await self._throttle()
             try:
-                data = await self._request("POST", "/api/sendText", json=payload)
+                data = await self._request(
+                    "POST",
+                    "/api/sendText",
+                    json=payload,
+                    attempts=self._settings.waha_send_max_retries,
+                )
             except WahaError as exc:
                 log.error("waha.send_text_failed", chat_id=chat_id, error=str(exc))
                 return SentMessage(ok=False, chat_id=chat_id, error=str(exc))
@@ -195,7 +215,12 @@ class WahaClient:
         async with self._send_lock:
             await self._throttle()
             try:
-                data = await self._request("POST", "/api/sendPoll", json=payload)
+                data = await self._request(
+                    "POST",
+                    "/api/sendPoll",
+                    json=payload,
+                    attempts=self._settings.waha_send_max_retries,
+                )
             except WahaError as exc:
                 log.error("waha.send_poll_failed", chat_id=chat_id, error=str(exc))
                 return SentMessage(ok=False, chat_id=chat_id, error=str(exc))
@@ -206,25 +231,6 @@ class WahaClient:
             if isinstance(message_id, dict):
                 message_id = message_id.get("_serialized")
         return SentMessage(ok=True, chat_id=chat_id, message_id=message_id)
-
-    # ------------------------------------------------------------- presencia
-    async def start_typing(self, chat_id: str) -> None:
-        if self._settings.waha_dry_run:
-            return
-        await self._try_request(
-            "POST",
-            "/api/startTyping",
-            json={"session": self._settings.waha_session, "chatId": chat_id},
-        )
-
-    async def stop_typing(self, chat_id: str) -> None:
-        if self._settings.waha_dry_run:
-            return
-        await self._try_request(
-            "POST",
-            "/api/stopTyping",
-            json={"session": self._settings.waha_session, "chatId": chat_id},
-        )
 
     # ---------------------------------------------------------------- grupos
     async def set_admins_only(self, group_id: str, admins_only: bool) -> bool:
@@ -250,31 +256,6 @@ class WahaClient:
                 hint="requiere WAHA Plus y que el bot sea admin del grupo",
             )
         return ok
-
-    async def get_participants(self, group_id: str) -> list[dict[str, Any]]:
-        """Devuelve los participantes del grupo (para resolver nombres)."""
-        session = self._settings.waha_session
-        _, data = await self._try_request(
-            "GET", f"/api/{session}/groups/{group_id}/participants"
-        )
-        if isinstance(data, list):
-            return [item for item in data if isinstance(item, dict)]
-        if isinstance(data, dict) and isinstance(data.get("participants"), list):
-            return [item for item in data["participants"] if isinstance(item, dict)]
-        return []
-
-    async def get_contact_name(self, chat_id: str) -> str | None:
-        """Intenta resolver el nombre público de un contacto."""
-        _, data = await self._try_request(
-            "GET",
-            f"/api/contacts?contactId={chat_id}&session={self._settings.waha_session}",
-        )
-        if isinstance(data, dict):
-            for key in ("pushname", "name", "shortName", "verifiedName"):
-                value = data.get(key)
-                if isinstance(value, str) and value.strip():
-                    return value.strip()
-        return None
 
     # ----------------------------------------------------------------- salud
     async def session_status(self) -> dict[str, Any]:

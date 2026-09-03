@@ -1,0 +1,375 @@
+# ms-whatsapp-games
+
+Microservicio en FastAPI que hace de **máster de juegos de texto por WhatsApp**.
+Recibe los eventos de una instancia de [WAHA](https://waha.devlike.pro/) y dirige
+la partida con un agente de **LangGraph**: reparte roles por privado, silencia el
+grupo de noche, recoge las acciones ocultas, narra el amanecer y gestiona la
+votación del día.
+
+El primer juego incluido es **El Hombre Lobo** (Los Hombres Lobo de Castronegro).
+El módulo de juegos es extensible: añadir otro es escribir una clase y
+registrarla.
+
+> Atiende **un solo número** de WhatsApp. No es multi-tenant y no pretende serlo.
+
+---
+
+## Cómo se ve una partida
+
+```
+Máster  ›  !juego hombreslobo
+
+Bot     ›  🌫️ Una niebla densa baja de la montaña…
+           🐺 EL HOMBRE LOBO — se abren las inscripciones.
+           Escribe YO en los próximos 30 segundos para entrar.
+
+Ana     ›  Yo
+Beto    ›  me apunto
+Caro    ›  yo juego
+…
+
+Bot     ›  🎭 6 jugadores entran a la partida
+           El reparto de esta noche:
+           🐺 1 Hombre Lobo · 🔮 1 Vidente · 🧪 1 Bruja · 🧑‍🌾 3 Aldeanos
+           🔇 El grupo queda en silencio. Revisa tu chat privado.
+
+(privado a Beto)  🐺 Tu rol es Hombre Lobo. Eres el único lobo…
+(privado a Ana)   🔮 Tu rol es Vidente. Cada noche puedes preguntarme…
+
+Bot     ›  🌙 NOCHE 1 — Se apagan los candiles uno por uno…
+(privado) 🐺 ¿A quién devoráis?  1. Ana  3. Caro  4. Dani …
+(privado) 🔮 ¿De quién quieres conocer la identidad?
+(privado) 🧪 Esta noche los lobos atacaron a Caro. ¿Curar, veneno o nada?
+
+Bot     ›  🌅 AMANECE EL DÍA 1
+           ☠️ Caro fue devorado por los lobos — era 🧑‍🌾 Aldeano
+           🔊 El chat está abierto.
+
+Bot     ›  ⚖️ EL JUICIO — tenéis 3 minutos para acusaros.
+Bot     ›  🗳️ [encuesta] ¿A quién linchamos?
+Bot     ›  ⚖️ VEREDICTO — ☠️ Beto fue linchado — era 🐺 Hombre Lobo
+Bot     ›  🎉 GANA EL PUEBLO
+```
+
+---
+
+## Arquitectura
+
+```
+   WhatsApp
+      │
+      ▼
+   ┌────────┐   webhook    ┌──────────────────────────────────────┐
+   │  WAHA  │─────────────►│  POST /webhooks/waha                 │
+   │        │◄─────────────│  (verifica HMAC → normaliza evento)  │
+   └────────┘  send/poll   └──────────────────┬───────────────────┘
+                                              ▼
+                                     ┌──────────────────┐
+                                     │   Orchestrator   │
+                                     └────────┬─────────┘
+                        ¿comando del máster?  │  ¿mensaje de jugador?
+                         ┌────────────────────┴──────────────────┐
+                         ▼                                       ▼
+                 lanzar / cancelar                       ┌───────────────┐
+                         │                              │ Buzón (Redis) │
+                         ▼                              │  listas + TTL │
+                 ┌───────────────┐   recoge con ventana  └───────┬───────┘
+                 │ Grafo del     │◄──────────────────────────────┘
+                 │ juego         │
+                 │ (LangGraph)   │──► WAHA (grupo y privados)
+                 └───────┬───────┘
+                         │
+             ┌───────────┴───────────┐
+             ▼                       ▼
+      SQLite (histórico)      SQLite (checkpoints)
+```
+
+**El desacople es la idea central.** El webhook nunca espera: sólo *encola*
+mensajes. Los nodos del grafo los *recogen* dentro de una ventana de tiempo
+(30 s para inscribirse, 60 s para las acciones de noche, 3 min de debate).
+La partida corre en una tarea de asyncio aparte, así que WAHA recibe su 200
+en milisegundos aunque el pueblo tarde tres minutos en decidirse.
+
+### Reparto de responsabilidades
+
+| Ruta | Qué hace |
+|---|---|
+| `app/main.py` | Ensambla la aplicación y gobierna el ciclo de vida |
+| `app/config.py` | Configuración por entorno (pydantic-settings) |
+| `app/api/routes.py` | Webhook, healthchecks, `/games`, `/status` |
+| `app/api/security.py` | Verificación HMAC y de secreto compartido |
+| `app/waha/client.py` | Cliente HTTP de WAHA con reintentos |
+| `app/waha/normalize.py` | Normaliza los payloads de WAHA a un tipo propio |
+| `app/core/inbox.py` | Buzones efímeros (Redis con TTL, o memoria) |
+| `app/core/db.py` | Histórico de mensajes y partidas en SQLite |
+| `app/core/llm.py` | Acceso a DeepSeek con degradación elegante |
+| `app/orchestrator/manager.py` | Encamina mensajes y gobierna las partidas |
+| `app/games/base.py` | Contrato común de los juegos |
+| `app/games/registry.py` | Registro y resolución de nombres |
+| `app/games/werewolf/` | El Hombre Lobo (grafo, roles, narrador, parseo) |
+
+---
+
+## Arranque rápido
+
+```bash
+git clone <este-repo> && cd ms-whatsapp-games
+cp .env.example .env
+```
+
+Edita `.env` y pon como mínimo tu número de máster:
+
+```env
+MANAGER_NUMBER=+573001234567
+LLM_API_KEY=sk-...            # opcional: sin clave usa narrativa estática
+```
+
+Levanta el stack:
+
+```bash
+docker compose up -d --build
+docker compose logs -f api
+```
+
+Vincula el número de WhatsApp del bot en WAHA:
+
+1. Abre `http://localhost:3000` y arranca la sesión `default`.
+2. Escanea el QR con el teléfono que hará de bot.
+3. Añade ese número al grupo donde vais a jugar y **hazlo administrador**
+   (hace falta para poder silenciar el grupo de noche).
+
+Comprueba que todo responde:
+
+```bash
+curl localhost:8000/health/ready
+curl localhost:8000/games
+```
+
+Y desde tu WhatsApp de máster, escribe en el grupo:
+
+```
+!juegos
+!juego hombreslobo
+```
+
+---
+
+## Comandos del máster
+
+Sólo los acepta el número de `MANAGER_NUMBER`. El prefijo es configurable con
+`COMMAND_PREFIX`.
+
+| Comando | Qué hace |
+|---|---|
+| `!juegos` | Lista los juegos disponibles |
+| `!juego <nombre>` | Inicia una partida (`hombreslobo`, `lobos`, `werewolf`…) |
+| `!estado` | Qué partidas hay en marcha |
+| `!cancelar` | Corta la partida y reabre el grupo |
+| `!ayuda` | Recuerda los comandos |
+
+Tolera mayúsculas y acentos: `!Juego`, `!CATÁLOGO` y `!cancelar` funcionan igual.
+
+El máster también puede jugar: si escribe `Yo` durante las inscripciones, entra
+como cualquier otro.
+
+---
+
+## El Hombre Lobo
+
+### Roles
+
+| Rol | Actúa de noche | Qué hace |
+|---|---|---|
+| 🐺 Hombre Lobo | sí | Elige la víctima. Si hay varios, deciden por mayoría |
+| 🔮 Vidente | sí | Pregunta por un jugador y se le dice si es lobo |
+| 🧪 Bruja | sí | Dos pociones de un solo uso: vida (revive a la víctima) y muerte |
+| 🏹 Cazador | al morir | Se lleva a alguien a la tumba con él |
+| 🏹💘 Cupido | 1.ª noche | Enamora a dos jugadores: si uno muere, el otro también |
+| 🧑‍🌾 Aldeano | no | Sólo su intuición y su labia |
+
+### Reparto por número de jugadores
+
+Los lobos crecen por tramos (1 hasta 6 jugadores, 2 hasta 11, 3 hasta 15,
+4 hasta 19, luego 1 por cada 5) y los roles especiales se añaden por umbrales:
+Vidente desde 4 jugadores, Bruja desde 6, Cazador desde 8, Cupido desde 10.
+
+Dos invariantes se comprueban en los tests para todo tamaño de mesa: **el
+pueblo arranca siempre en mayoría estricta** y **siempre queda al menos un
+aldeano raso** (si no, no hay a quién deducir).
+
+### El grafo
+
+Cada fase es un nodo; el ciclo se rompe cuando `evaluar` encuentra una
+condición de victoria.
+
+| Nodo | Fase |
+|---|---|
+| `reclutamiento` | Abre la convocatoria y registra a quien se apunta |
+| `reparto` | Silencia el grupo, asigna roles y los manda por privado |
+| `noche_inicio` | Narra la noche y recoge lobos, vidente y Cupido en paralelo |
+| `noche_bruja` | Le dice a quién atacaron y recoge su decisión |
+| `resolucion` | Cruza ataque, curación y veneno; resuelve cadenas de muerte |
+| `amanecer` | Publica las víctimas y reabre el grupo |
+| `evaluar` | Comprueba la victoria y enruta |
+| `debate` | Abre el juicio público con temporizador |
+| `votacion` | Publica la encuesta y recoge los votos |
+| `veredicto` | Lincha al más votado y revela su rol |
+| `final` | Narra el desenlace y revela todos los roles |
+
+La bruja tiene su propio nodo porque **necesita saber a quién atacaron los
+lobos**: su ventana se abre después de la de ellos, no en paralelo.
+
+### Condiciones de victoria
+
+- **Pueblo**: no queda ningún lobo vivo.
+- **Lobos**: los lobos igualan o superan en número al resto.
+- **Enamorados**: sobreviven sólo los dos enamorados y son de bandos opuestos
+  (se comprueba antes que la de los lobos, que si no se la comería).
+- **Tablas**: no queda nadie, o se alcanza `MAX_ROUNDS`.
+
+---
+
+## Configuración
+
+Todas las variables están documentadas en `.env.example`. Las que más importan:
+
+| Variable | Por defecto | Para qué |
+|---|---|---|
+| `MANAGER_NUMBER` | *(vacío)* | Único número que puede dar órdenes |
+| `GAME_GROUP_ID` | *(vacío)* | Grupo fijo. Si se deja vacío, se usa el grupo desde el que llega el comando |
+| `LLM_PROVIDER` | `deepseek` | `deepseek`, `openai` o `none` |
+| `LLM_API_KEY` | *(vacío)* | Sin clave, la narrativa es estática (el juego funciona igual) |
+| `MANAGE_GROUP_PERMISSIONS` | `true` | Silenciar el grupo de noche (requiere WAHA Plus) |
+| `WAHA_WEBHOOK_HMAC_SECRET` | *(vacío)* | Firma de los webhooks |
+| `WAHA_DRY_RUN` | `false` | Escribe los envíos en el log en vez de mandarlos |
+| `RECRUIT_SECONDS` | `30` | Ventana de inscripciones |
+| `NIGHT_ACTION_SECONDS` | `60` | Ventana de las acciones nocturnas |
+| `DEBATE_SECONDS` | `180` | Duración del debate |
+| `VOTE_SECONDS` | `30` | Duración de la votación |
+| `WEREWOLF_MIN_PLAYERS` | `4` | Mínimo para arrancar |
+| `WEREWOLF_TIE_BREAK` | `none` | `none` = un empate no lincha; `random` = decide el azar |
+| `MESSAGE_RETENTION_DAYS` | `30` | Purga del histórico al arrancar |
+
+### Redis y SQLite: para qué cada uno
+
+- **Redis** guarda lo efímero: los buzones de la ronda en curso, con TTL
+  (`INBOX_TTL_SECONDS`). Se borran al terminar la partida
+  (`PURGE_INBOX_ON_FINISH`). Si Redis no responde, el servicio arranca con un
+  buzón en memoria y lo dice en el log: se sigue jugando, pero se pierden las
+  colas al reiniciar.
+- **SQLite** guarda lo que interesa conservar: el histórico de mensajes, la
+  traza de cada partida (`game_events`) y los checkpoints del grafo. Vive en el
+  volumen `./data`.
+
+---
+
+## El LLM nunca es crítico
+
+Es una decisión de diseño, no una casualidad: **el modelo pone ambientación, el
+código pone la mecánica**.
+
+- La narrativa la genera el LLM a partir de unos HECHOS acotados, y cada escena
+  tiene un texto estático de respaldo en `app/games/werewolf/prompts.py`. Con
+  `LLM_PROVIDER=none` la partida es perfectamente jugable.
+- Quién muere, quién vota a quién y quién gana **no pasa nunca por el modelo**:
+  se resuelve con reglas en `app/games/werewolf/parsing.py`. Un fallo de red no
+  puede cambiar el resultado de una partida.
+- El reclutamiento sí usa el modelo para interpretar respuestas coloquiales,
+  pero con dos redes de seguridad: un "yo" inequívoco entra aunque el modelo lo
+  omita, y un "yo no" inequívoco queda fuera aunque el modelo lo incluya.
+- Al narrador se le prohíbe explícitamente revelar roles que no estén en los
+  HECHOS. Cuando la bruja salva a alguien, se le pide insinuar una
+  "intervención misteriosa" sin nombrar quién: un frasco vacío en el alféizar,
+  arañazos en la puerta.
+
+---
+
+## Añadir un juego nuevo
+
+1. Crea `app/games/<mi_juego>/game.py` con una subclase de `Game`:
+
+```python
+from app.games.base import Game, GameResult, GameSpec
+from app.games.registry import register
+
+
+@register
+class MiJuego(Game):
+    spec = GameSpec(
+        key="mijuego",
+        title="Mi Juego",
+        tagline="Una línea que explique de qué va.",
+        aliases=("mj", "mi juego"),
+        min_players=3,
+        max_players=20,
+    )
+
+    async def run(self) -> GameResult:
+        await self.ctx.transport.send_group("¡Empezamos!")
+        mensajes = await self.ctx.inbox.collect(
+            self.ctx.session_id, timeout=30, group=True
+        )
+        ...
+        return GameResult(status="finished", winner="alguien")
+```
+
+2. Añade el módulo a `BUILTIN_MODULES` en `app/games/registry.py`.
+
+Ya está: `!juegos` lo lista y `!juego mijuego` lo lanza. El contexto
+(`self.ctx`) te da `transport` para hablar, `inbox` para escuchar, `llm` para
+narrar y `store` para dejar traza. Usar LangGraph es opcional — El Hombre Lobo
+lo usa porque tiene fases cíclicas y estado compartido, pero un juego sencillo
+puede ser un bucle.
+
+Para reutilizar el reclutamiento en lenguaje natural, llama a
+`app.games.recruit.select_players`.
+
+---
+
+## Desarrollo
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements-dev.txt
+
+.venv/bin/python -m pytest        # 148 tests
+.venv/bin/ruff check app tests
+.venv/bin/uvicorn app.main:app --reload
+```
+
+Los tests corren **sin WAHA, sin Redis y sin LLM**: `tests/conftest.py` trae
+un transporte que apunta lo enviado y una mesa de jugadores automáticos que
+lee los privados del bot y responde como lo haría una persona. Una partida
+completa de 11 jugadores tarda milisegundos, así que
+`tests/test_werewolf_flow.py` juega partidas enteras de verdad en lugar de
+simular el grafo.
+
+El buzón se prueba contra las dos implementaciones (memoria y Redis, con
+`fakeredis`) usando los mismos casos, para que la ruta de producción no se
+desvíe de la que usan los demás tests.
+
+---
+
+## Límites conocidos
+
+- **Silenciar el grupo requiere WAHA Plus.** El endpoint
+  `PUT /api/{session}/groups/{id}/settings/security/messages-admin-only` no
+  está en la imagen `core` gratuita. Si no está disponible, se registra un
+  warning y la partida continúa: el silencio pasa a ser una convención social
+  en vez de una restricción técnica. Con `MANAGE_GROUP_PERMISSIONS=false` ni se
+  intenta.
+- **Las rutas de WAHA cambian entre versiones y motores** (WEBJS / NOWEB /
+  GOWS). Están todas concentradas en `app/waha/client.py` y la lectura de
+  payloads en `app/waha/normalize.py`, que ya contempla varias formas
+  alternativas. No se han verificado contra una instancia real en este
+  entorno: si una versión difiere, esos dos ficheros son los únicos a tocar.
+- **Si los lobos no responden, no hay ataque.** Se narra como que no se
+  pusieron de acuerdo. Se prefirió eso a matar a alguien al azar: el día
+  siempre avanza por linchamiento, así que la partida no se estanca.
+- **Las encuestas de WhatsApp admiten 12 opciones.** Con mesas más grandes se
+  recorta la encuesta, pero los votos por texto siguen aceptando a cualquiera.
+- **Una partida por grupo a la vez.** `!cancelar` la corta.
+- **Reiniciar el servicio corta las partidas en curso.** Los checkpoints del
+  grafo quedan en disco para inspección, pero no se reanuda automáticamente:
+  las ventanas de tiempo ya habrían expirado. Las partidas que quedaron a medias
+  se marcan como `interrupted` al arrancar.

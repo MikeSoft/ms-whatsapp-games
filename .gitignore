@@ -1,0 +1,28 @@
+# Entorno
+.venv/
+venv/
+.env
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Datos locales: bases SQLite y checkpoints del grafo
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Editor / sistema
+.idea/
+.vscode/
+.DS_Store

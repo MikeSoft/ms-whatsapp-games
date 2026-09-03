@@ -1,0 +1,19 @@
+# Dependencias de ejecución. Versiones acotadas por minor para que una
+# actualización de la API de LangGraph no rompa un despliegue sin avisar.
+fastapi>=0.141,<0.142
+uvicorn[standard]>=0.52,<0.53
+pydantic>=2.13,<3
+pydantic-settings>=2.15,<3
+httpx>=0.28,<0.29
+structlog>=26.1,<27
+
+# Persistencia
+sqlalchemy>=2.0,<2.1
+aiosqlite>=0.22,<0.23
+redis>=8.1,<9
+
+# Agente
+langgraph>=1.2,<2
+langgraph-checkpoint-sqlite>=3.1,<4
+langchain-core>=1.6,<2
+langchain-openai>=1.6,<2

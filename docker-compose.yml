@@ -1,0 +1,75 @@
+# Stack completo: el microservicio, Redis para los buzones efímeros y WAHA
+# como pasarela de WhatsApp. SQLite no es un servicio: vive en el volumen
+# ./data como un fichero.
+
+services:
+  api:
+    build: .
+    container_name: wag-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Dentro de la red de compose estos son los nombres de servicio, no
+      # localhost. Sobrescriben lo que haya en .env.
+      REDIS_URL: redis://redis:6379/0
+      WAHA_BASE_URL: http://waha:3000
+      DATABASE_URL: sqlite+aiosqlite:////app/data/games.db
+      CHECKPOINTER_PATH: /app/data/checkpoints.db
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      # Persiste el histórico de mensajes y los checkpoints entre despliegues.
+      - ./data:/app/data
+    depends_on:
+      redis:
+        condition: service_healthy
+      waha:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  redis:
+    image: redis:7-alpine
+    container_name: wag-redis
+    restart: unless-stopped
+    # Los buzones son efímeros y tienen TTL propio, así que no hace falta
+    # persistirlos en disco; se limita la memoria y se descartan los más
+    # antiguos si se llenara.
+    command: >
+      redis-server
+      --save ""
+      --appendonly no
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  waha:
+    # Pasarela HTTP de WhatsApp. La imagen "core" es gratuita; silenciar el
+    # grupo (WHATSAPP_ADMINS_ONLY) requiere WAHA Plus: ver README.
+    image: devlikeapro/waha:latest
+    container_name: wag-waha
+    restart: unless-stopped
+    ports:
+      - "${WAHA_PORT:-3000}:3000"
+    environment:
+      WHATSAPP_HOOK_URL: http://api:8000/webhooks/waha
+      WHATSAPP_HOOK_EVENTS: message,poll.vote
+      WHATSAPP_DEFAULT_ENGINE: ${WAHA_ENGINE:-NOWEB}
+      WHATSAPP_RESTART_ALL_SESSIONS: "true"
+      # Debe coincidir con WAHA_API_KEY y WAHA_WEBHOOK_HMAC_SECRET del .env.
+      WHATSAPP_API_KEY: ${WAHA_API_KEY:-}
+      WHATSAPP_HOOK_HMAC_KEY: ${WAHA_WEBHOOK_HMAC_SECRET:-}
+    volumes:
+      - waha-sessions:/app/.sessions
+
+volumes:
+  waha-sessions:

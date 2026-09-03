@@ -1,0 +1,26 @@
+[project]
+name = "ms-whatsapp-games"
+version = "0.1.0"
+description = "Máster de juegos de texto para WhatsApp con FastAPI, WAHA y LangGraph"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 95
+target-version = "py311"
+exclude = [".venv", "data"]
+
+[tool.ruff.lint]
+# BLE está activo a propósito: el servicio captura excepciones amplias en
+# los bordes (WAHA, LLM, Redis) para degradar en vez de tumbar una partida,
+# y cada caso lleva su `noqa: BLE001` como marca de que es deliberado.
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF", "BLE"]
+ignore = [
+    # Los mensajes de log llevan textos largos en español.
+    "E501",
+    # `zip(strict=)` ya se usa donde importa.
+    "B905",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Los tests acceden a atributos internos del orquestador a propósito.
+"tests/*" = ["SLF001"]

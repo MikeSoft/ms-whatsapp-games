@@ -1,0 +1,405 @@
+"""Orquestador: encamina los mensajes entrantes y gobierna las partidas.
+
+Este servicio atiende **un solo número** de WhatsApp: no hay multi-tenencia.
+El máster (``MANAGER_NUMBER``) manda comandos; todo lo demás son mensajes de
+jugadores que se encolan en el buzón para que los lea la partida en curso.
+
+    webhook ──► Orchestrator.handle
+                  │
+                  ├── ¿comando del máster?  ──► lanzar / cancelar / informar
+                  │
+                  └── ¿mensaje de jugador?  ──► buzón (Redis) ──► nodos del grafo
+
+La partida corre en una tarea de asyncio aparte: el webhook nunca se queda
+esperando a que alguien vote.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import time
+import uuid
+from dataclasses import dataclass, field
+from typing import Any
+
+from app.config import Settings
+from app.core.db import Store
+from app.core.inbox import Inbox
+from app.core.llm import LLMClient
+from app.games import registry
+from app.games.base import Game, GameContext, GameResult
+from app.games.transport import WahaTransport
+from app.logging_conf import get_logger
+from app.orchestrator.commands import Command, help_text, parse_command
+from app.waha.client import WahaClient
+from app.waha.models import InboundMessage, Scope
+
+log = get_logger("orchestrator")
+
+
+@dataclass
+class RunningGame:
+    """Una partida viva y su tarea de fondo."""
+
+    session_id: str
+    game_key: str
+    group_id: str
+    started_by: str
+    game: Game
+    task: asyncio.Task[GameResult]
+    started_at: float = field(default_factory=time.time)
+
+    @property
+    def elapsed(self) -> float:
+        return time.time() - self.started_at
+
+
+class Orchestrator:
+    """Punto de entrada de todo lo que llega de WhatsApp."""
+
+    def __init__(
+        self,
+        *,
+        settings: Settings,
+        waha: WahaClient,
+        inbox: Inbox,
+        store: Store | None = None,
+        llm: LLMClient | None = None,
+        checkpointer: Any | None = None,
+    ) -> None:
+        self.settings = settings
+        self.waha = waha
+        self.inbox = inbox
+        self.store = store
+        self.llm = llm or LLMClient(settings)
+        self.checkpointer = checkpointer
+        self._games: dict[str, RunningGame] = {}
+        self._lock = asyncio.Lock()
+        registry.load_builtin_games()
+
+    # =============================================================== entrada
+    async def handle(self, message: InboundMessage) -> None:
+        """Procesa un mensaje ya normalizado."""
+        # Descarta reenvíos del webhook: contar dos veces un "Yo" o un voto
+        # falsearía la partida.
+        if not await self.inbox.mark_seen(message.message_id):
+            log.debug("orchestrator.duplicate", message_id=message.message_id)
+            return
+
+        if self.store is not None:
+            await self.store.log_inbound(
+                message, game_session_id=self._session_for(message)
+            )
+
+        is_manager = message.sender_id == self.settings.manager_jid
+        command = parse_command(message.text, prefix=self.settings.command_prefix)
+
+        if command is not None:
+            if is_manager:
+                await self._run_command(command, message)
+            else:
+                log.info(
+                    "orchestrator.command_rejected",
+                    sender=message.sender_id,
+                    command=command.name,
+                )
+            return
+
+        # Los mensajes que manda el propio bot no vuelven al juego: eso sería
+        # un bucle de retroalimentación.
+        if message.from_me:
+            return
+
+        await self._route_to_games(message)
+
+    async def _route_to_games(self, message: InboundMessage) -> None:
+        """Encola el mensaje en las partidas que puedan quererlo."""
+        if not self._games:
+            return
+
+        if message.scope == Scope.GROUP:
+            targets = [g for g in self._games.values() if g.group_id == message.chat_id]
+        else:
+            # Un privado se ofrece a todas las partidas vivas: cada una sólo
+            # lee los buzones de los jugadores a los que ha preguntado, así
+            # que ofrecerlo de más es inofensivo.
+            targets = list(self._games.values())
+
+        for game in targets:
+            await self.inbox.push(game.session_id, message)
+
+    def _session_for(self, message: InboundMessage) -> str | None:
+        for game in self._games.values():
+            if message.scope == Scope.GROUP and game.group_id == message.chat_id:
+                return game.session_id
+        if len(self._games) == 1:
+            return next(iter(self._games.values())).session_id
+        return None
+
+    # ============================================================== comandos
+    async def _run_command(self, command: Command, message: InboundMessage) -> None:
+        log.info("orchestrator.command", name=command.name, args=command.args)
+        handlers = {
+            "juego": self._cmd_start,
+            "juegos": self._cmd_list,
+            "cancelar": self._cmd_cancel,
+            "estado": self._cmd_status,
+            "ayuda": self._cmd_help,
+        }
+        handler = handlers.get(command.name)
+        if handler is not None:
+            await handler(command, message)
+
+    async def _reply(self, message: InboundMessage, text: str) -> None:
+        """Contesta al máster por donde escribió."""
+        await self.waha.send_text(message.chat_id, text)
+
+    async def _cmd_help(self, command: Command, message: InboundMessage) -> None:
+        await self._reply(message, help_text(self.settings.command_prefix))
+
+    async def _cmd_list(self, command: Command, message: InboundMessage) -> None:
+        specs = registry.specs()
+        if not specs:
+            await self._reply(message, "No hay juegos registrados.")
+            return
+        prefix = self.settings.command_prefix
+        lineas = ["🎲 *Juegos disponibles*", ""]
+        for spec in specs:
+            lineas.append(f"*{spec.title}* — {spec.tagline}")
+            lineas.append(f"  {spec.rango_jugadores()}")
+            lineas.append(f"  Lanzar con: `{prefix}juego {spec.key}`")
+            lineas.append("")
+        await self._reply(message, "\n".join(lineas).strip())
+
+    async def _cmd_status(self, command: Command, message: InboundMessage) -> None:
+        if not self._games:
+            await self._reply(
+                message,
+                "💤 No hay ninguna partida en marcha.\n"
+                f"Lanza una con `{self.settings.command_prefix}juegos`.",
+            )
+            return
+        lineas = ["🎯 *Partidas en marcha*", ""]
+        for game in self._games.values():
+            spec = type(game.game).spec
+            lineas.append(
+                f"*{spec.title}* en {game.group_id}\n"
+                f"  sesión: `{game.session_id}`\n"
+                f"  lleva {int(game.elapsed)} s"
+            )
+        await self._reply(message, "\n".join(lineas))
+
+    async def _cmd_cancel(self, command: Command, message: InboundMessage) -> None:
+        group_id = self._resolve_group(message)
+        cancelled = await self.cancel(group_id)
+        if cancelled:
+            await self._reply(message, "🛑 Partida cancelada.")
+        else:
+            await self._reply(message, "No había ninguna partida que cancelar.")
+
+    async def _cmd_start(self, command: Command, message: InboundMessage) -> None:
+        nombre = command.argument
+        if not nombre:
+            await self._reply(
+                message,
+                "Dime qué juego. Por ejemplo:\n"
+                f"`{self.settings.command_prefix}juego hombreslobo`\n\n"
+                f"Ver todos: `{self.settings.command_prefix}juegos`",
+            )
+            return
+
+        game_cls = registry.resolve(nombre)
+        if game_cls is None:
+            disponibles = ", ".join(spec.key for spec in registry.specs())
+            await self._reply(
+                message,
+                f"No conozco el juego «{nombre}».\nDisponibles: {disponibles}",
+            )
+            return
+
+        group_id = self._resolve_group(message)
+        if not group_id:
+            await self._reply(
+                message,
+                "No sé en qué grupo jugar. Manda el comando dentro del grupo, "
+                "o configura `GAME_GROUP_ID` en el entorno.",
+            )
+            return
+
+        async with self._lock:
+            if group_id in self._games:
+                actual = type(self._games[group_id].game).spec.title
+                await self._reply(
+                    message,
+                    f"Ya hay una partida de *{actual}* en marcha en ese grupo. "
+                    f"Usa `{self.settings.command_prefix}cancelar` primero.",
+                )
+                return
+
+            running = await self._launch(game_cls, group_id, message, command.args)
+
+        spec = type(running.game).spec
+        await self._reply(
+            message,
+            f"✅ Lanzando *{spec.title}* en el grupo.\nSesión: `{running.session_id}`",
+        )
+
+    def _resolve_group(self, message: InboundMessage) -> str:
+        """El grupo configurado manda; si no hay, el del propio mensaje."""
+        if self.settings.game_group_id:
+            return self.settings.game_group_id
+        if message.scope == Scope.GROUP:
+            return message.chat_id
+        # Con una sola partida viva, "cancelar" por privado es inequívoco.
+        if len(self._games) == 1:
+            return next(iter(self._games))
+        return ""
+
+    # =============================================================== partidas
+    async def _launch(
+        self,
+        game_cls: type[Game],
+        group_id: str,
+        message: InboundMessage,
+        args: list[str],
+    ) -> RunningGame:
+        spec = game_cls.spec
+        session_id = f"{spec.key}-{uuid.uuid4().hex[:10]}"
+
+        transport = WahaTransport(
+            self.waha, group_id, store=self.store, session_id=session_id
+        )
+        ctx = GameContext(
+            session_id=session_id,
+            group_id=group_id,
+            started_by=message.sender_id,
+            settings=self.settings,
+            transport=transport,
+            inbox=self.inbox,
+            llm=self.llm,
+            store=self.store,
+            checkpointer=self.checkpointer,
+            args=args,
+        )
+        game = game_cls(ctx)
+
+        if self.store is not None:
+            await self.store.create_game_session(
+                session_id,
+                game_key=spec.key,
+                group_id=group_id,
+                started_by=message.sender_id,
+            )
+
+        task = asyncio.create_task(
+            self._supervise(session_id, group_id, game), name=f"game:{session_id}"
+        )
+        running = RunningGame(
+            session_id=session_id,
+            game_key=spec.key,
+            group_id=group_id,
+            started_by=message.sender_id,
+            game=game,
+            task=task,
+        )
+        self._games[group_id] = running
+        log.info(
+            "orchestrator.game_started",
+            session_id=session_id,
+            game=spec.key,
+            group_id=group_id,
+        )
+        return running
+
+    async def _supervise(self, session_id: str, group_id: str, game: Game) -> GameResult:
+        """Ejecuta la partida y limpia detrás de ella, pase lo que pase."""
+        result = GameResult(status="error", error="no ejecutada")
+        try:
+            result = await game.run()
+            return result
+        except asyncio.CancelledError:
+            result = GameResult(status="cancelled")
+            log.info("orchestrator.game_cancelled", session_id=session_id)
+            raise
+        except Exception as exc:
+            result = GameResult(status="error", error=str(exc))
+            log.exception("orchestrator.game_failed", session_id=session_id, error=str(exc))
+            # Un fallo a media noche dejaría el grupo silenciado para siempre.
+            try:
+                await game.ctx.transport.set_group_locked(False)
+            except Exception:  # noqa: BLE001
+                log.warning("orchestrator.unlock_failed", session_id=session_id)
+            await self._notify_manager(
+                f"⚠️ La partida `{session_id}` falló: {exc}\n"
+                "El grupo se ha reabierto por si quedó silenciado."
+            )
+            return result
+        finally:
+            self._games.pop(group_id, None)
+            if self.settings.purge_inbox_on_finish:
+                await self.inbox.clear(session_id)
+            if self.store is not None:
+                await self.store.finish_game_session(
+                    session_id,
+                    status=result.status,
+                    winner=result.winner,
+                    rounds=result.rounds,
+                    players=result.players,
+                    error=result.error,
+                )
+            if result.status == "finished" and result.summary:
+                await self._notify_manager(f"🏁 `{session_id}`: {result.summary}")
+
+    async def cancel(self, group_id: str) -> bool:
+        """Corta la partida de un grupo. ``True`` si había alguna."""
+        running = self._games.get(group_id)
+        if running is None:
+            return False
+
+        running.task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await running.task
+
+        # Después de cancelar, el juego deja el grupo en un estado usable:
+        # si la partida murió de noche, el grupo estaba silenciado.
+        try:
+            await running.game.on_cancel()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("orchestrator.on_cancel_failed", error=str(exc))
+
+        self._games.pop(group_id, None)
+        await self.inbox.clear(running.session_id)
+        if self.store is not None:
+            await self.store.finish_game_session(running.session_id, status="cancelled")
+        return True
+
+    async def _notify_manager(self, text: str) -> None:
+        if self.settings.manager_jid:
+            await self.waha.send_text(self.settings.manager_jid, text)
+
+    # ================================================================= estado
+    def snapshot(self) -> dict[str, Any]:
+        """Resumen para el endpoint de estado."""
+        return {
+            "juegos_registrados": [spec.key for spec in registry.specs()],
+            "partidas_activas": [
+                {
+                    "session_id": g.session_id,
+                    "juego": g.game_key,
+                    "grupo": g.group_id,
+                    "segundos": int(g.elapsed),
+                }
+                for g in self._games.values()
+            ],
+            "llm": {
+                "disponible": self.llm.available,
+                "proveedor": self.settings.llm_provider,
+                "modelo": self.settings.llm_model,
+            },
+        }
+
+    async def shutdown(self) -> None:
+        """Cancela todas las partidas al parar el servicio."""
+        for group_id in list(self._games):
+            await self.cancel(group_id)

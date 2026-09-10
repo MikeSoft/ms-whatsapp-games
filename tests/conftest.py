@@ -221,6 +221,9 @@ class ScriptedPlayers:
     hunter_reply: str = "nadie"
     #: Si es False, nadie contesta los privados de la noche.
     answer_night: bool = True
+    #: Lo que grita la mesa cuando se abre el juicio. Con la lista vacía el
+    #: debate transcurre en silencio, que es el caso de la mayoría de tests.
+    debate_lines: list[str] = field(default_factory=list)
 
     roles: dict[str, str] = field(default_factory=dict)
     joined: bool = False
@@ -247,6 +250,11 @@ class ScriptedPlayers:
             self.joined = True
             for jid in self.jids:
                 await self._say_group(jid, "Yo")
+            return
+
+        if "EL JUICIO" in text and self.debate_lines:
+            for jid, linea in zip(self.jids, self.debate_lines, strict=False):
+                await self._say_group(jid, linea)
             return
 
         if "*VOTACIÓN*" in text:

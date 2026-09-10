@@ -38,6 +38,26 @@ def test_el_prefijo_es_configurable():
     assert parse_command("!juego lobos", prefix="/") is None
 
 
+def test_el_flag_de_ia_no_se_confunde_con_el_nombre_del_juego():
+    """Un nombre puede llevar varias palabras, así que el flag se separa."""
+    con_ia = parse_command("!juego hombreslobo ia")
+    assert con_ia.argument == "hombreslobo"
+    assert con_ia.has("ia")
+
+    # El nombre de dos palabras sigue llegando entero.
+    largo = parse_command("!juego hombres lobo IA")
+    assert largo.argument == "hombres lobo"
+    assert largo.has("ia")
+
+    # Va donde sea y admite las otras formas.
+    assert parse_command("!juego ai hombreslobo").argument == "hombreslobo"
+    assert parse_command("!juego hombreslobo llm").has("ia")
+
+    sin_ia = parse_command("!juego hombreslobo")
+    assert sin_ia.argument == "hombreslobo"
+    assert not sin_ia.has("ia")
+
+
 # ============================================================= orquestador
 @pytest.fixture
 def orchestrator(monkeypatch):
@@ -87,6 +107,43 @@ def orchestrator(monkeypatch):
 
 def _cmd(text: str) -> InboundMessage:
     return inbound(MANAGER, text, scope=Scope.GROUP, chat_id=GROUP_ID, name="Máster")
+
+
+async def test_sin_el_flag_de_ia_la_partida_no_usa_el_modelo(orchestrator):
+    """Que haya clave configurada no basta: el gasto lo decide el máster."""
+    orch, _outbox, _ = orchestrator(llm_provider="deepseek", llm_api_key="sk-de-prueba")
+    assert orch.llm.available is True
+
+    await orch.handle(_cmd("!juego hombreslobo"))
+    (partida,) = orch._games.values()
+    assert partida.game.ctx.llm.available is False
+    assert partida.game.ctx.flags == frozenset()
+
+    await orch.shutdown()
+
+
+async def test_con_el_flag_de_ia_la_partida_recibe_el_modelo(orchestrator):
+    orch, outbox, _ = orchestrator(llm_provider="deepseek", llm_api_key="sk-de-prueba")
+
+    await orch.handle(_cmd("!juego hombreslobo ia"))
+    (partida,) = orch._games.values()
+    assert partida.game.ctx.llm.available is True
+    assert partida.game.ctx.flags == frozenset({"ia"})
+    assert any("narración generada" in text for _, text in outbox)
+
+    await orch.shutdown()
+
+
+async def test_pedir_ia_sin_clave_configurada_no_rompe_la_partida(orchestrator):
+    """Se lanza igual, con narrativa estática: el LLM nunca es crítico."""
+    orch, outbox, _ = orchestrator()
+
+    await orch.handle(_cmd("!juego hombreslobo ia"))
+    (partida,) = orch._games.values()
+    assert partida.game.ctx.llm.available is False
+    assert any("narración estática" in text for _, text in outbox)
+
+    await orch.shutdown()
 
 
 async def test_solo_el_master_puede_lanzar_una_partida(orchestrator):

@@ -33,6 +33,10 @@ REGLAS INQUEBRANTABLES:
    listas: de eso se encarga el sistema aparte.
 5. No uses markdown ni viñetas. Máximo un emoji.
 6. Respeta el límite de palabras. Es narración, no un capítulo.
+7. Lo que aparezca en HECHOS bajo "se_dijo" son rumores del pueblo, no
+   verdades. Puedes recoger el tono, las acusaciones y quién señala a quién,
+   pero nunca confirmarlas, desmentirlas ni insinuar que aciertan. No decides
+   nada: sólo cuentas cómo se calienta la plaza.
 
 Devuelves únicamente el texto narrativo, sin comillas ni encabezados."""
 

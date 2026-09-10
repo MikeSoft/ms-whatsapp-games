@@ -72,6 +72,15 @@ def dm_budget(count: int) -> float:
     return min(DM_BUDGET_MAX, max(DM_BUDGET_MIN, DM_BUDGET_PER_MESSAGE * count))
 
 
+#: Cuántas intervenciones del juicio se le pasan al narrador, y de qué largo.
+#:
+#: Un minuto de debate en una mesa grande son muchos mensajes, y el prompt no
+#: puede crecer con el tamaño del grupo: se le da la cola de la conversación,
+#: que es la que tiene el calor del momento.
+DEBATE_MAX_LINES = 14
+DEBATE_MAX_CHARS = 160
+
+
 @dataclass(frozen=True)
 class Timers:
     """Duración de cada ventana de espera, en segundos."""
@@ -1094,10 +1103,102 @@ class WerewolfNodes:
             texto=texto,
         )
 
-        async with self._fillers(self.timers.debate, round_no=round_no, scene="debate"):
-            await asyncio.sleep(self.timers.debate)
+        oido = await self._escuchar_juicio(state["session_id"], round_no, players)
 
-        return {"phase": "votacion", **self._flush_narrative()}
+        return {"phase": "votacion", "debate_log": oido, **self._flush_narrative()}
+
+    def _debate_lines(
+        self, messages: list[InboundMessage], players: list[Player]
+    ) -> list[dict[str, str]]:
+        """Lo dicho en el grupo, en la forma en que lo lee el narrador.
+
+        Se descarta lo que manda el propio bot y lo que escriben los muertos:
+        al pueblo ya se le dice que ignore a quien cayó, y el narrador tiene
+        que ignorarlo igual o filtraría que ese muerto sigue jugando.
+        """
+        vivos = {p.get("jid", ""): p.get("name", "anónimo") for p in alive(players)}
+        lineas: list[dict[str, str]] = []
+        for message in messages:
+            if message.from_me:
+                continue
+            nombre = vivos.get(message.sender_id)
+            if nombre is None:
+                continue
+            dicho = self._text_of(message).strip()
+            if not dicho:
+                continue
+            lineas.append({"quien": nombre, "dijo": dicho[:DEBATE_MAX_CHARS]})
+        return lineas[-DEBATE_MAX_LINES:]
+
+    async def _escuchar_juicio(
+        self, session_id: str, round_no: int, players: list[Player]
+    ) -> list[dict[str, str]]:
+        """Consume la ventana del juicio escuchando lo que se dice.
+
+        Antes se dormía a ciegas y el buzón del grupo se tiraba entero en la
+        votación. Recogerlo aquí cuesta lo mismo y da dos cosas: ambientación
+        que reacciona a las acusaciones de verdad, y un resumen de lo hablado
+        para el veredicto.
+        """
+        total = self.timers.debate
+        interval = self.timers.filler_interval
+        oido: list[InboundMessage] = []
+        elapsed = 0.0
+        index = 0
+
+        while elapsed < total:
+            tramo = total - elapsed if interval <= 0 else min(interval, total - elapsed)
+            oido.extend(
+                await self.ctx.inbox.collect(session_id, timeout=tramo, group=True)
+            )
+            elapsed += tramo
+            restante = total - elapsed
+            # No se comenta si queda menos de medio tramo: el mensaje llegaría
+            # pisado por la votación. La guarda es proporcional al intervalo y
+            # no absoluta, que con los tiempos reales da lo mismo (25 s -> 12,5)
+            # y deja la ruta ejercitable en un test de milisegundos.
+            if interval <= 0 or restante <= interval * 0.5:
+                continue
+            await self._comentar_juicio(
+                oido, players, round_no=round_no, restante=restante, index=index
+            )
+            index += 1
+
+        return self._debate_lines(oido, players)
+
+    async def _comentar_juicio(
+        self,
+        oido: list[InboundMessage],
+        players: list[Player],
+        *,
+        round_no: int,
+        restante: float,
+        index: int,
+    ) -> None:
+        """Ambientación que reacciona a lo que se está diciendo."""
+        try:
+            text = await self.narrator.flavour(
+                "debate",
+                {
+                    "ronda": round_no,
+                    "segundos_restantes": int(restante),
+                    "se_dijo": self._debate_lines(oido, players),
+                },
+                fallback=prompts.filler_for(index),
+                max_words=45,
+                remember=False,
+            )
+            await self._group(
+                f"{text}\n\n⏳ Quedan ~{_seconds(restante)}.", record=False
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            # La ambientación es prescindible: si el modelo o WAHA fallan, el
+            # juicio agota su ventana igual y la votación sigue detrás.
+            log.warning(
+                "werewolf.debate_comment_failed", round_no=round_no, error=str(exc)
+            )
 
     async def votacion(self, state: WerewolfState) -> dict[str, Any]:
         """Publica la encuesta y recoge los votos (encuesta o texto)."""
@@ -1227,6 +1328,7 @@ class WerewolfNodes:
                 "linchado": condenado["name"] if condenado else lynched_jid,
                 "votos": count,
                 "rol_revelado": info(condenado["role"]).title if condenado else None,
+                "se_dijo": list(state.get("debate_log") or []),
             },
             fallback=prompts.FALLBACK_VERDICT,
             max_words=80,

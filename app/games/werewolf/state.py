@@ -63,6 +63,10 @@ class WerewolfState(TypedDict, total=False):
     deaths_last_night: list[str]
     lynched: str | None
     votes: dict[str, str]
+    #: Lo que se dijo en voz alta durante el juicio de la ronda en curso, como
+    #: ``{"quien": nombre, "dijo": texto}``. Alimenta la narración, que lo
+    #: comenta sin darlo por cierto. Se reemplaza en cada ronda.
+    debate_log: list[dict[str, str]]
 
     # --------------------------------------------------------------- narrativa
     #: Todo lo narrado al grupo, en orden. Es una clave acumulativa: los nodos
@@ -93,6 +97,7 @@ def initial_state(session_id: str, group_id: str) -> WerewolfState:
         deaths_last_night=[],
         lynched=None,
         votes={},
+        debate_log=[],
         narrative_log=[],
         winner=None,
         finished=False,

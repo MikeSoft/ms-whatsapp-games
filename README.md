@@ -168,11 +168,17 @@ Sólo los acepta el número de `MANAGER_NUMBER`. El prefijo es configurable con
 |---|---|
 | `!juegos` | Lista los juegos disponibles |
 | `!juego <nombre>` | Inicia una partida (`hombreslobo`, `lobos`, `werewolf`…) |
+| `!juego <nombre> ia` | Igual, pero narrada por el modelo (ver más abajo) |
 | `!estado` | Qué partidas hay en marcha |
 | `!cancelar` | Corta la partida y reabre el grupo |
 | `!ayuda` | Recuerda los comandos |
 
 Tolera mayúsculas y acentos: `!Juego`, `!CATÁLOGO` y `!cancelar` funcionan igual.
+
+El sufijo `ia` va en cualquier posición y admite `ai`, `llm` y `narrador`. Como
+el nombre de un juego puede llevar varias palabras, el modificador se separa
+del nombre al parsear: `!juego hombres lobo ia` lanza «hombres lobo» con
+narración generada.
 
 El máster también puede jugar: si escribe `Yo` durante las inscripciones, entra
 como cualquier otro.
@@ -276,12 +282,27 @@ Todas las variables están documentadas en `.env.example`. Las que más importan
 Es una decisión de diseño, no una casualidad: **el modelo pone ambientación, el
 código pone la mecánica**.
 
+**Se pide por partida, no se hereda del entorno.** Tener `LLM_API_KEY` puesta
+sólo deja la narración disponible; quien decide gastarla es el máster, al
+lanzar con `!juego hombreslobo ia`. Sin el sufijo la partida corre con los
+textos estáticos aunque haya clave. Si se pide `ia` y no hay clave válida, la
+partida se lanza igual y avisa de que narrará en estático: pedir el modelo
+nunca impide jugar.
+
 - La narrativa la genera el LLM a partir de unos HECHOS acotados, y cada escena
   tiene un texto estático de respaldo en `app/games/werewolf/prompts.py`. Con
   `LLM_PROVIDER=none` la partida es perfectamente jugable.
 - Quién muere, quién vota a quién y quién gana **no pasa nunca por el modelo**:
   se resuelve con reglas en `app/games/werewolf/parsing.py`. Un fallo de red no
   puede cambiar el resultado de una partida.
+- **El narrador escucha el juicio.** Lo que se habla en el grupo durante el
+  debate se recoge y se le pasa como HECHOS, así que la ambientación comenta
+  las acusaciones reales en vez de rellenar con niebla genérica, y el veredicto
+  se narra sabiendo de qué se discutió. Con tres cautelas: sólo mensajes
+  **públicos** (los privados llevan roles), sólo de **jugadores vivos** (a los
+  muertos ya se les ignora), y acotado a las últimas intervenciones para que el
+  prompt no crezca con el tamaño de la mesa. Al modelo se le dice
+  explícitamente que eso son rumores: puede recoger el tono, nunca confirmarlos.
 - El reclutamiento sí usa el modelo para interpretar respuestas coloquiales,
   pero con dos redes de seguridad: un "yo" inequívoco entra aunque el modelo lo
   omita, y un "yo no" inequívoco queda fuera aunque el modelo lo incluya.

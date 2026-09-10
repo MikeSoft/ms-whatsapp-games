@@ -32,10 +32,21 @@ _FENCE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.MULTILINE)
 class LLMClient:
     """Envoltorio sobre un chat model de LangChain con degradación elegante."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, *, enabled: bool = True) -> None:
+        """``enabled=False`` construye un cliente apagado sin tocar la red.
+
+        Sirve para las partidas que no piden narración con modelo: el juego
+        recibe un cliente con la misma interfaz que siempre devuelve ``None``,
+        así que cae en los textos estáticos sin ramas extra en los nodos.
+        """
         self._settings = settings
         self._model: Any | None = None
         self._disabled_reason: str | None = None
+
+        if not enabled:
+            self._disabled_reason = "no se pidió narración con modelo"
+            log.info("llm.disabled", reason=self._disabled_reason)
+            return
 
         if not settings.llm_enabled:
             self._disabled_reason = (

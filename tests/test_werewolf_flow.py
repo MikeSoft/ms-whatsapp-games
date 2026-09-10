@@ -8,10 +8,17 @@ import re
 import pytest
 
 from app.core.inbox import MemoryInbox
+from app.core.llm import LLMClient
 from app.games.werewolf.game import WerewolfGame
-from app.games.werewolf.nodes import Timers, WerewolfNodes
+from app.games.werewolf.nodes import (
+    DEBATE_MAX_CHARS,
+    DEBATE_MAX_LINES,
+    Timers,
+    WerewolfNodes,
+)
 from app.games.werewolf.roles import Role
 from app.games.werewolf.state import initial_state
+from app.waha.models import Scope
 from tests.conftest import (
     GROUP_ID,
     FakeTransport,
@@ -356,3 +363,144 @@ async def test_el_cazador_se_consulta_al_morir_y_solo_entonces():
     # 3. El grupo se enteró de las dos muertes.
     anuncio = transport.group_messages[-1]
     assert anuncio.count("☠️") == 2
+
+
+# =====================================================================
+# El narrador escucha el juicio
+# =====================================================================
+def _con_modelo() -> object:
+    """Ajustes con el LLM habilitado (las llamadas se interceptan aparte)."""
+    return make_settings(llm_provider="deepseek", llm_api_key="sk-de-prueba")
+
+
+async def test_lo_hablado_en_el_juicio_llega_al_estado_y_al_narrador(table, monkeypatch):
+    """El debate deja de tirarse: se recoge y se le pasa al modelo.
+
+    Antes el buzón del grupo se llenaba durante el juicio y la votación lo
+    descartaba entero, así que la ambientación sólo sabía cuántos segundos
+    quedaban. Ahora el narrador comenta acusaciones reales.
+    """
+    prompts_vistos: list[str] = []
+
+    async def fake_complete(self, system, user, **kwargs):
+        prompts_vistos.append(user)
+        return "La plaza se enciende y las antorchas tiemblan."
+
+    monkeypatch.setattr(LLMClient, "complete", fake_complete)
+
+    dichos = ["yo creo que es Jugador3", "Jugador3 lleva callado toda la noche", "paso"]
+    ctx, _transport, _inbox, _script = table(
+        6, settings=_con_modelo(), debate_lines=dichos
+    )
+    game = WerewolfGame(ctx, timers=fast_timers())
+    await game.run()
+
+    # Queda en el estado del grafo, así que viaja al checkpoint.
+    oido = game.last_state.get("debate_log", [])
+    assert oido, "el juicio tenía que dejar constancia de lo hablado"
+    assert {linea["dijo"] for linea in oido} <= set(dichos)
+    assert all(linea["quien"].startswith("Jugador") for linea in oido)
+
+    # Y el veredicto se narra sabiendo lo que se dijo.
+    veredictos = [p for p in prompts_vistos if "ESCENA: veredicto" in p]
+    assert veredictos, "no se narró ningún veredicto"
+    assert any("se_dijo" in p for p in veredictos)
+    assert any("lleva callado toda la noche" in p for p in veredictos)
+
+
+async def test_el_narrador_no_oye_a_los_muertos_ni_al_propio_bot():
+    """Al pueblo se le dice que ignore a quien cayó; al narrador también.
+
+    Si lo escuchara, comentaría intervenciones de gente eliminada y filtraría
+    que sigue jugando.
+    """
+    transport = FakeTransport()
+    inbox = MemoryInbox()
+    ctx = make_context(transport=transport, inbox=inbox, session_id="s-oye")
+    nodes = WerewolfNodes(ctx, timers=Timers(debate=0.05, filler_interval=0.0))
+
+    vivo = {"jid": "573001@c.us", "name": "Viva", "number": 1, "alive": True}
+    muerto = {"jid": "573002@c.us", "name": "Muerto", "number": 2, "alive": False}
+
+    mensajes = [
+        inbound(vivo["jid"], "sospecho de alguien", scope=Scope.GROUP),
+        inbound(muerto["jid"], "yo sé quién es el lobo", scope=Scope.GROUP),
+        inbound(vivo["jid"], "", scope=Scope.GROUP),
+    ]
+    propio = inbound(vivo["jid"], "mensaje del bot", scope=Scope.GROUP)
+    propio = propio.model_copy(update={"from_me": True})
+
+    lineas = nodes._debate_lines([*mensajes, propio], [vivo, muerto])
+
+    assert lineas == [{"quien": "Viva", "dijo": "sospecho de alguien"}]
+
+
+async def test_lo_hablado_se_acota_en_numero_y_longitud():
+    """El prompt no puede crecer con el tamaño de la mesa."""
+    transport = FakeTransport()
+    ctx = make_context(transport=transport, inbox=MemoryInbox(), session_id="s-tope")
+    nodes = WerewolfNodes(ctx, timers=fast_timers())
+
+    jugador = {"jid": "573001@c.us", "name": "Habla", "number": 1, "alive": True}
+    muchos = [
+        inbound(jugador["jid"], f"mensaje {i} " + "x" * 400, scope=Scope.GROUP)
+        for i in range(40)
+    ]
+
+    lineas = nodes._debate_lines(muchos, [jugador])
+
+    assert len(lineas) == DEBATE_MAX_LINES
+    assert all(len(linea["dijo"]) <= DEBATE_MAX_CHARS for linea in lineas)
+    # Se queda la cola de la conversación, que es la que tiene el calor.
+    assert lineas[-1]["dijo"].startswith("mensaje 39")
+
+
+async def test_el_relleno_del_juicio_comenta_lo_que_se_esta_diciendo(monkeypatch):
+    """La ambientación de espera reacciona al debate, no sólo al reloj."""
+    prompts_vistos: list[str] = []
+
+    async def fake_complete(self, system, user, **kwargs):
+        prompts_vistos.append(user)
+        return "Los ánimos se calientan junto al pozo."
+
+    monkeypatch.setattr(LLMClient, "complete", fake_complete)
+
+    transport = FakeTransport()
+    inbox = MemoryInbox()
+    ctx = make_context(
+        settings=_con_modelo(), transport=transport, inbox=inbox, session_id="s-relleno"
+    )
+    nodes = WerewolfNodes(ctx, timers=Timers(debate=0.4, filler_interval=0.1))
+
+    jugador = {"jid": "573001@c.us", "name": "Ana", "number": 1, "alive": True}
+    await inbox.push("s-relleno", inbound(jugador["jid"], "fue Beto", scope=Scope.GROUP))
+
+    oido = await nodes._escuchar_juicio("s-relleno", 1, [jugador])
+
+    assert oido == [{"quien": "Ana", "dijo": "fue Beto"}]
+    debates = [p for p in prompts_vistos if "ESCENA: debate" in p]
+    assert debates, "no se mandó ambientación durante el juicio"
+    assert any("fue Beto" in p for p in debates)
+
+
+async def test_si_el_narrador_falla_el_juicio_sigue_corriendo(monkeypatch):
+    """La ambientación es prescindible; la ventana del juicio no."""
+
+    async def revienta(self, system, user, **kwargs):
+        raise RuntimeError("el modelo se cayó")
+
+    monkeypatch.setattr(LLMClient, "complete", revienta)
+
+    transport = FakeTransport()
+    inbox = MemoryInbox()
+    ctx = make_context(
+        settings=_con_modelo(), transport=transport, inbox=inbox, session_id="s-falla"
+    )
+    nodes = WerewolfNodes(ctx, timers=Timers(debate=0.4, filler_interval=0.1))
+
+    jugador = {"jid": "573001@c.us", "name": "Ana", "number": 1, "alive": True}
+    await inbox.push("s-falla", inbound(jugador["jid"], "fue Beto", scope=Scope.GROUP))
+
+    oido = await nodes._escuchar_juicio("s-falla", 1, [jugador])
+
+    assert oido == [{"quien": "Ana", "dijo": "fue Beto"}]

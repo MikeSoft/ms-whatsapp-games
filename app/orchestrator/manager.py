@@ -72,6 +72,9 @@ class Orchestrator:
         self.inbox = inbox
         self.store = store
         self.llm = llm or LLMClient(settings)
+        # Cliente apagado para las partidas que no piden "ia". Se construye
+        # una vez: no toca la red y evita decidir con ramas en cada nodo.
+        self.llm_off = LLMClient(settings, enabled=False)
         self.checkpointer = checkpointer
         self._games: dict[str, RunningGame] = {}
         self._lock = asyncio.Lock()
@@ -238,12 +241,20 @@ class Orchestrator:
                 )
                 return
 
-            running = await self._launch(game_cls, group_id, message, command.args)
+            running = await self._launch(
+                game_cls, group_id, message, command.args, command.flags
+            )
 
         spec = type(running.game).spec
+        narracion = (
+            "🧠 narración generada"
+            if running.game.ctx.llm.available
+            else "📜 narración estática"
+        )
         await self._reply(
             message,
-            f"✅ Lanzando *{spec.title}* en el grupo.\nSesión: `{running.session_id}`",
+            f"✅ Lanzando *{spec.title}* en el grupo.\n{narracion}\n"
+            f"Sesión: `{running.session_id}`",
         )
 
     def _resolve_group(self, message: InboundMessage) -> str:
@@ -264,6 +275,7 @@ class Orchestrator:
         group_id: str,
         message: InboundMessage,
         args: list[str],
+        flags: frozenset[str] = frozenset(),
     ) -> RunningGame:
         spec = game_cls.spec
         session_id = f"{spec.key}-{uuid.uuid4().hex[:10]}"
@@ -278,10 +290,13 @@ class Orchestrator:
             settings=self.settings,
             transport=transport,
             inbox=self.inbox,
-            llm=self.llm,
+            # Sin "ia" la partida corre con los textos estáticos aunque haya
+            # clave configurada: gastar API es una decisión del máster.
+            llm=self.llm if "ia" in flags else self.llm_off,
             store=self.store,
             checkpointer=self.checkpointer,
             args=args,
+            flags=flags,
         )
         game = game_cls(ctx)
 
@@ -310,6 +325,7 @@ class Orchestrator:
             session_id=session_id,
             game=spec.key,
             group_id=group_id,
+            narracion="ia" if ctx.llm.available else "estatica",
         )
         return running
 

@@ -13,7 +13,7 @@ services:
       # Dentro de la red de compose estos son los nombres de servicio, no
       # localhost. Sobrescriben lo que haya en .env.
       REDIS_URL: redis://redis:6379/0
-      WAHA_BASE_URL: http://waha:3000
+      WAHA_BASE_URL: ${WAHA_BASE_URL:-http://waha:3000}
       DATABASE_URL: sqlite+aiosqlite:////app/data/games.db
       CHECKPOINTER_PATH: /app/data/checkpoints.db
     ports:
@@ -55,7 +55,9 @@ services:
   waha:
     # Pasarela HTTP de WhatsApp. La imagen "core" es gratuita; silenciar el
     # grupo (WHATSAPP_ADMINS_ONLY) requiere WAHA Plus: ver README.
-    image: devlikeapro/waha:latest
+    # El tag por defecto sólo publica amd64; en Apple Silicon conviene
+    # WAHA_IMAGE=devlikeapro/waha:arm para no emular.
+    image: ${WAHA_IMAGE:-devlikeapro/waha:latest}
     container_name: wag-waha
     restart: unless-stopped
     ports:

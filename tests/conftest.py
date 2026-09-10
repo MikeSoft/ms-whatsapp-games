@@ -19,6 +19,24 @@ from app.waha.models import InboundMessage, Scope
 GROUP_ID = "120363000000000000@g.us"
 MANAGER = "573000000000@c.us"
 
+# La suite tiene que dar el mismo resultado en cualquier máquina. Dos cosas
+# del entorno se colaban y la ponían roja sin que nadie tocara código:
+#
+# 1. El ``.env`` del desarrollador. ``Settings`` lo lee por defecto, así que
+#    un despliegue local con otra sesión de WAHA u otro prefijo de comandos
+#    cambiaba lo que los tests daban por sentado.
+# 2. Un Redis escuchando en el 6379. El arranque hace ping y, si responde,
+#    usa el buzón de Redis en vez del de memoria; los marcadores de "visto"
+#    sobreviven entre ejecuciones y el webhook descarta como duplicados los
+#    mensajes de la siguiente.
+#
+# Se cortan las dos aquí: sin fichero de entorno y contra un puerto cerrado.
+Settings.model_config["env_file"] = None
+
+#: Puerto reservado por la IANA como "sin uso": el ping falla al instante y el
+#: buzón cae a memoria, que es lo que los tests asumen.
+UNREACHABLE_REDIS = "redis://127.0.0.1:9/15"
+
 _counter = itertools.count(1)
 
 
@@ -142,7 +160,7 @@ def make_settings(**overrides) -> Settings:
         "game_group_id": GROUP_ID,
         "llm_provider": "none",
         "llm_api_key": None,
-        "redis_url": "redis://localhost:6379/15",
+        "redis_url": UNREACHABLE_REDIS,
         "database_url": "sqlite+aiosqlite:///:memory:",
         "checkpointer": "memory",
         "werewolf_min_players": 4,

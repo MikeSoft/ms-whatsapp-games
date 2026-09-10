@@ -267,3 +267,35 @@ async def test_un_redis_caido_no_aborta_el_procesamiento_del_webhook():
     # No lanza: el servicio sigue en pie.
     await inbox.push("s-1", mensaje)
 
+
+
+async def test_el_juicio_no_se_alarga_por_lo_que_tarde_el_narrador():
+    """La ventana del debate es un plazo, no una suma de esperas.
+
+    El narrador comenta lo que se dice mientras corre el juicio. Si su
+    latencia se sumara a la ventana, un modelo lento estiraría el debate y
+    retrasaría la votación: exactamente lo que el resto del servicio evita
+    con presupuestos por todas partes.
+    """
+    transport = FakeTransport()
+    inbox = MemoryInbox()
+    settings = make_settings(llm_provider="deepseek", llm_api_key="sk-de-prueba")
+    ctx = make_context(
+        settings=settings, transport=transport, inbox=inbox, session_id="s-lento"
+    )
+    nodes = WerewolfNodes(ctx, timers=Timers(debate=0.4, filler_interval=0.1))
+
+    async def narrador_lento(self, system, user, **kwargs):
+        await asyncio.sleep(0.5)
+        return "El pozo murmura."
+
+    jugador = {"jid": "573001@c.us", "name": "Ana", "number": 1, "alive": True}
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(LLMClient, "complete", narrador_lento)
+        inicio = asyncio.get_running_loop().time()
+        await nodes._escuchar_juicio("s-lento", 1, [jugador])
+        tardo = asyncio.get_running_loop().time() - inicio
+
+    # Tres comentarios de 0,5 s serializados llevarían esto a ~1,9 s.
+    assert tardo < 0.4 * 2, f"el juicio duró {tardo:.2f}s con una ventana de 0,40s"

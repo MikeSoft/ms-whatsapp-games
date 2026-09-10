@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import random
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -218,20 +219,22 @@ class WerewolfNodes:
             log.warning("werewolf.aux_task_failed", error=str(exc))
 
     @contextlib.asynccontextmanager
-    async def _fillers(self, seconds: float, *, round_no: int, scene: str = "relleno"):
-        """Manda ambientación al grupo mientras se espera."""
+    async def _fillers(self, seconds: float, *, round_no: int):
+        """Manda ambientación al grupo mientras se espera.
+
+        Es la espera ciega de la noche. El juicio no la usa: allí se escucha
+        lo que se dice y se comenta (ver :meth:`_escuchar_juicio`).
+        """
         task: asyncio.Task[None] | None = None
         if self.timers.filler_interval > 0 and seconds > self.timers.filler_interval * 1.5:
-            task = asyncio.create_task(
-                self._filler_loop(seconds, round_no=round_no, scene=scene)
-            )
+            task = asyncio.create_task(self._filler_loop(seconds, round_no=round_no))
         try:
             yield
         finally:
             if task is not None:
                 await self._stop_task(task)
 
-    async def _filler_loop(self, seconds: float, *, round_no: int, scene: str) -> None:
+    async def _filler_loop(self, seconds: float, *, round_no: int) -> None:
         interval = self.timers.filler_interval
         elapsed = 0.0
         index = 0
@@ -243,7 +246,7 @@ class WerewolfNodes:
                 return
             try:
                 text = await self.narrator.flavour(
-                    scene,
+                    "relleno",
                     {"ronda": round_no, "segundos_restantes": int(remaining)},
                     fallback=prompts.filler_for(index),
                     max_words=35,
@@ -1140,54 +1143,86 @@ class WerewolfNodes:
         que reacciona a las acusaciones de verdad, y un resumen de lo hablado
         para el veredicto.
         """
-        total = self.timers.debate
         interval = self.timers.filler_interval
-        oido: list[InboundMessage] = []
-        elapsed = 0.0
+        # Plazo por reloj, no suma de esperas: lo que tarde el narrador no
+        # puede estirar el juicio ni retrasar la votación.
+        deadline = time.monotonic() + self.timers.debate
+        lineas: list[dict[str, str]] = []
         index = 0
+        comentario: asyncio.Task[None] | None = None
 
-        while elapsed < total:
-            tramo = total - elapsed if interval <= 0 else min(interval, total - elapsed)
-            oido.extend(
-                await self.ctx.inbox.collect(session_id, timeout=tramo, group=True)
-            )
-            elapsed += tramo
-            restante = total - elapsed
-            # No se comenta si queda menos de medio tramo: el mensaje llegaría
-            # pisado por la votación. La guarda es proporcional al intervalo y
-            # no absoluta, que con los tiempos reales da lo mismo (25 s -> 12,5)
-            # y deja la ruta ejercitable en un test de milisegundos.
-            if interval <= 0 or restante <= interval * 0.5:
-                continue
-            await self._comentar_juicio(
-                oido, players, round_no=round_no, restante=restante, index=index
-            )
-            index += 1
+        try:
+            while True:
+                restante = deadline - time.monotonic()
+                if restante <= 0:
+                    break
+                tramo = restante if interval <= 0 else min(interval, restante)
+                recogido = await self.ctx.inbox.collect(
+                    session_id, timeout=tramo, group=True
+                )
+                # Se reduce a líneas en cada tramo y se guarda sólo la cola: en
+                # un grupo grande, retener los mensajes crudos del debate
+                # entero es cargar con el payload de WAHA de cada uno para
+                # acabar usando las últimas catorce.
+                lineas = (lineas + self._debate_lines(recogido, players))[
+                    -DEBATE_MAX_LINES:
+                ]
 
-        return self._debate_lines(oido, players)
+                restante = deadline - time.monotonic()
+                # No se comenta si queda menos de medio tramo: el mensaje
+                # llegaría pisado por la votación. La guarda es proporcional al
+                # intervalo y no absoluta, que con los tiempos reales da lo
+                # mismo (25 s -> 12,5) y deja la ruta ejercitable en un test de
+                # milisegundos.
+                if interval <= 0 or restante <= interval * 0.5:
+                    continue
+                # En una tarea aparte y sólo si la anterior ya acabó: el
+                # comentario acompaña al juicio, no lo bloquea, y un modelo
+                # lento no acumula llamadas encoladas.
+                if comentario is None or comentario.done():
+                    comentario = asyncio.create_task(
+                        self._comentar_juicio(
+                            list(lineas), round_no=round_no, deadline=deadline, index=index
+                        )
+                    )
+                    index += 1
+        finally:
+            if comentario is not None:
+                await self._stop_task(comentario)
+
+        return lineas
 
     async def _comentar_juicio(
         self,
-        oido: list[InboundMessage],
-        players: list[Player],
+        lineas: list[dict[str, str]],
         *,
         round_no: int,
-        restante: float,
+        deadline: float,
         index: int,
     ) -> None:
-        """Ambientación que reacciona a lo que se está diciendo."""
+        """Ambientación que reacciona a lo que se está diciendo.
+
+        La cuenta atrás se recalcula al enviar, no al pedir el texto: entre
+        una cosa y otra hay una llamada al modelo, y anunciar el tiempo que
+        quedaba *antes* de esperarla sería mentir.
+        """
         try:
             text = await self.narrator.flavour(
                 "debate",
                 {
                     "ronda": round_no,
-                    "segundos_restantes": int(restante),
-                    "se_dijo": self._debate_lines(oido, players),
+                    "segundos_restantes": int(max(0.0, deadline - time.monotonic())),
+                    "se_dijo": lineas,
                 },
                 fallback=prompts.filler_for(index),
                 max_words=45,
                 remember=False,
             )
+            restante = deadline - time.monotonic()
+            if restante <= 0:
+                # El modelo tardó más que lo que quedaba de juicio. Publicarlo
+                # ahora lo pondría encima de la votación.
+                return
             await self._group(
                 f"{text}\n\n⏳ Quedan ~{_seconds(restante)}.", record=False
             )
@@ -1208,8 +1243,9 @@ class WerewolfNodes:
         vivos = alive(players)
         votantes = {p["jid"] for p in vivos}
 
-        # Limpieza obligada: el debate acaba de llenar el buzón del grupo y
-        # nada de eso son votos.
+        # Red de seguridad: el nodo del debate consume su buzón, pero entre
+        # que cierra su ventana y se publica la encuesta pueden colarse
+        # mensajes, y ninguno de ellos es un voto.
         await self.ctx.inbox.clear(session_id, keys=["group"])
 
         opciones = poll_options(players)

@@ -223,7 +223,7 @@ class WerewolfNodes:
         """Manda ambientación al grupo mientras se espera.
 
         Es la espera ciega de la noche. El juicio no la usa: allí se escucha
-        lo que se dice y se comenta (ver :meth:`_escuchar_juicio`).
+        lo que se dice y se comenta (ver :meth:`_listen_to_debate`).
         """
         task: asyncio.Task[None] | None = None
         if self.timers.filler_interval > 0 and seconds > self.timers.filler_interval * 1.5:
@@ -236,32 +236,69 @@ class WerewolfNodes:
 
     async def _filler_loop(self, seconds: float, *, round_no: int) -> None:
         interval = self.timers.filler_interval
-        elapsed = 0.0
+        # Plazo por reloj y no suma de esperas: entre vuelta y vuelta hay una
+        # llamada al modelo, y contar sólo los `sleep` haría que la cuenta
+        # atrás anunciara tiempo que ya no queda.
+        deadline = time.monotonic() + seconds
         index = 0
         while True:
-            await asyncio.sleep(interval)
-            elapsed += interval
-            remaining = seconds - elapsed
-            if remaining <= max(3.0, interval * 0.5):
+            restante = deadline - time.monotonic()
+            if restante <= interval * 0.5:
                 return
-            try:
-                text = await self.narrator.flavour(
-                    "relleno",
-                    {"ronda": round_no, "segundos_restantes": int(remaining)},
-                    fallback=prompts.filler_for(index),
-                    max_words=35,
-                    remember=False,
-                )
-                await self._group(
-                    f"{text}\n\n⏳ Quedan ~{_seconds(remaining)}.", record=False
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:  # noqa: BLE001
-                # La ambientación es prescindible: si falla, se calla y la
-                # partida sigue esperando su ventana igual.
-                log.warning("werewolf.filler_failed", round_no=round_no, error=str(exc))
+            await asyncio.sleep(min(interval, restante))
+            if deadline - time.monotonic() <= interval * 0.5:
                 return
+            await self._ambience(
+                "relleno", round_no=round_no, deadline=deadline, index=index
+            )
+            index += 1
+
+    async def _ambience(
+        self,
+        scene: str,
+        *,
+        round_no: int,
+        deadline: float,
+        index: int,
+        max_words: int = 35,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        """Publica ambientación mientras se espera, si aún queda ventana.
+
+        Lo usan las esperas de la noche y el juicio. La cuenta atrás se toma
+        del plazo en dos momentos —al pedir el texto y al enviarlo— porque
+        entre ambos hay una llamada al modelo: anunciar el tiempo que quedaba
+        antes de esperarla sería mentir, y publicar cuando ya se agotó pondría
+        el mensaje encima de la fase siguiente.
+        """
+        try:
+            facts: dict[str, Any] = {
+                "ronda": round_no,
+                "segundos_restantes": int(max(0.0, deadline - time.monotonic())),
+            }
+            if extra:
+                facts.update(extra)
+            text = await self.narrator.flavour(
+                scene,
+                facts,
+                fallback=prompts.filler_for(index),
+                max_words=max_words,
+                remember=False,
+            )
+            restante = deadline - time.monotonic()
+            if restante <= 0:
+                return
+            await self._group(
+                f"{text}\n\n⏳ Quedan ~{_seconds(restante)}.", record=False
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            # La ambientación es prescindible: si el modelo o WAHA fallan, se
+            # calla y la fase agota su ventana igual.
+            log.warning(
+                "werewolf.ambience_failed", scene=scene, round_no=round_no, error=str(exc)
+            )
             index += 1
 
     async def _reminder(self, delay: float, text: str) -> asyncio.Task[None]:
@@ -1097,6 +1134,14 @@ class WerewolfNodes:
             fallback=prompts.FALLBACK_TRIAL,
             max_words=70,
         )
+        # El juicio empieza con este anuncio, no antes. El buzón del grupo
+        # arrastra todo lo dicho desde la votación anterior —el veredicto, la
+        # noche entera si el grupo no llegó a silenciarse, las reacciones al
+        # amanecer— y nada de eso se dijo en el juicio. Sin vaciarlo, la
+        # primera recogida se lo atribuiría al debate y el narrador comentaría
+        # acusaciones que nadie hizo aquí.
+        await self.ctx.inbox.clear(state["session_id"], keys=["group"])
+
         texto = self._texto()
         await self._group(
             f"⚖️ *EL JUICIO — día {round_no}*\n\n{flavour}\n\n"
@@ -1106,7 +1151,7 @@ class WerewolfNodes:
             texto=texto,
         )
 
-        oido = await self._escuchar_juicio(state["session_id"], round_no, players)
+        oido = await self._listen_to_debate(state["session_id"], round_no, players)
 
         return {"phase": "votacion", "debate_log": oido, **self._flush_narrative()}
 
@@ -1127,13 +1172,17 @@ class WerewolfNodes:
             nombre = vivos.get(message.sender_id)
             if nombre is None:
                 continue
-            dicho = self._text_of(message).strip()
+            if message.poll_options:
+                # Un voto no es una intervención. Contarlo como tal pondría en
+                # boca de alguien una acusación que nunca pronunció.
+                continue
+            dicho = message.text.strip()
             if not dicho:
                 continue
             lineas.append({"quien": nombre, "dijo": dicho[:DEBATE_MAX_CHARS]})
         return lineas[-DEBATE_MAX_LINES:]
 
-    async def _escuchar_juicio(
+    async def _listen_to_debate(
         self, session_id: str, round_no: int, players: list[Player]
     ) -> list[dict[str, str]]:
         """Consume la ventana del juicio escuchando lo que se dice.
@@ -1181,8 +1230,13 @@ class WerewolfNodes:
                 # lento no acumula llamadas encoladas.
                 if comentario is None or comentario.done():
                     comentario = asyncio.create_task(
-                        self._comentar_juicio(
-                            list(lineas), round_no=round_no, deadline=deadline, index=index
+                        self._ambience(
+                            "debate",
+                            round_no=round_no,
+                            deadline=deadline,
+                            index=index,
+                            max_words=45,
+                            extra={"se_dijo": list(lineas)},
                         )
                     )
                     index += 1
@@ -1191,49 +1245,6 @@ class WerewolfNodes:
                 await self._stop_task(comentario)
 
         return lineas
-
-    async def _comentar_juicio(
-        self,
-        lineas: list[dict[str, str]],
-        *,
-        round_no: int,
-        deadline: float,
-        index: int,
-    ) -> None:
-        """Ambientación que reacciona a lo que se está diciendo.
-
-        La cuenta atrás se recalcula al enviar, no al pedir el texto: entre
-        una cosa y otra hay una llamada al modelo, y anunciar el tiempo que
-        quedaba *antes* de esperarla sería mentir.
-        """
-        try:
-            text = await self.narrator.flavour(
-                "debate",
-                {
-                    "ronda": round_no,
-                    "segundos_restantes": int(max(0.0, deadline - time.monotonic())),
-                    "se_dijo": lineas,
-                },
-                fallback=prompts.filler_for(index),
-                max_words=45,
-                remember=False,
-            )
-            restante = deadline - time.monotonic()
-            if restante <= 0:
-                # El modelo tardó más que lo que quedaba de juicio. Publicarlo
-                # ahora lo pondría encima de la votación.
-                return
-            await self._group(
-                f"{text}\n\n⏳ Quedan ~{_seconds(restante)}.", record=False
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            # La ambientación es prescindible: si el modelo o WAHA fallan, el
-            # juicio agota su ventana igual y la votación sigue detrás.
-            log.warning(
-                "werewolf.debate_comment_failed", round_no=round_no, error=str(exc)
-            )
 
     async def votacion(self, state: WerewolfState) -> dict[str, Any]:
         """Publica la encuesta y recoge los votos (encuesta o texto)."""

@@ -283,11 +283,12 @@ Es una decisión de diseño, no una casualidad: **el modelo pone ambientación, 
 código pone la mecánica**.
 
 **Se pide por partida, no se hereda del entorno.** Tener `LLM_API_KEY` puesta
-sólo deja la narración disponible; quien decide gastarla es el máster, al
-lanzar con `!juego hombreslobo ia`. Sin el sufijo la partida corre con los
-textos estáticos aunque haya clave. Si se pide `ia` y no hay clave válida, la
-partida se lanza igual y avisa de que narrará en estático: pedir el modelo
-nunca impide jugar.
+sólo deja el modelo disponible; quien decide gastarlo es el máster, al lanzar
+con `!juego hombreslobo ia`. Sin el sufijo la partida corre entera sin modelo
+aunque haya clave: narración estática **y** reclutamiento determinista. El
+flag no es sólo la narración, apaga o enciende el LLM para toda la partida.
+Si se pide `ia` y no hay clave válida, la partida se lanza igual y avisa de
+que narrará en estático: pedir el modelo nunca impide jugar.
 
 - La narrativa la genera el LLM a partir de unos HECHOS acotados, y cada escena
   tiene un texto estático de respaldo en `app/games/werewolf/prompts.py`. Con
@@ -303,9 +304,12 @@ nunca impide jugar.
   muertos ya se les ignora), y acotado a las últimas intervenciones para que el
   prompt no crezca con el tamaño de la mesa. Al modelo se le dice
   explícitamente que eso son rumores: puede recoger el tono, nunca confirmarlos.
-- El reclutamiento sí usa el modelo para interpretar respuestas coloquiales,
-  pero con dos redes de seguridad: un "yo" inequívoco entra aunque el modelo lo
-  omita, y un "yo no" inequívoco queda fuera aunque el modelo lo incluya.
+- El reclutamiento usa el modelo para interpretar respuestas coloquiales
+  **en las partidas lanzadas con `ia`**, con dos redes de seguridad: un "yo"
+  inequívoco entra aunque el modelo lo omita, y un "yo no" inequívoco queda
+  fuera aunque el modelo lo incluya. Sin el sufijo el reclutamiento es
+  determinista, así que un "va, contá conmigo" puede quedarse fuera: es el
+  precio de que una partida sin `ia` no gaste API por ningún lado.
 - Al narrador se le prohíbe explícitamente revelar roles que no estén en los
   HECHOS. Cuando la bruja salva a alguien, se le pide insinuar una
   "intervención misteriosa" sin nombrar quién: un frasco vacío en el alféizar,

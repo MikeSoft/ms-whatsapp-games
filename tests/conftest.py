@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import itertools
+import os
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 import pytest
 
+from app import main as app_main
 from app.config import Settings
 from app.core.inbox import MemoryInbox
 from app.core.llm import LLMClient
@@ -19,23 +21,45 @@ from app.waha.models import InboundMessage, Scope
 GROUP_ID = "120363000000000000@g.us"
 MANAGER = "573000000000@c.us"
 
-# La suite tiene que dar el mismo resultado en cualquier máquina. Dos cosas
-# del entorno se colaban y la ponían roja sin que nadie tocara código:
-#
-# 1. El ``.env`` del desarrollador. ``Settings`` lo lee por defecto, así que
-#    un despliegue local con otra sesión de WAHA u otro prefijo de comandos
-#    cambiaba lo que los tests daban por sentado.
-# 2. Un Redis escuchando en el 6379. El arranque hace ping y, si responde,
-#    usa el buzón de Redis en vez del de memoria; los marcadores de "visto"
-#    sobreviven entre ejecuciones y el webhook descarta como duplicados los
-#    mensajes de la siguiente.
-#
-# Se cortan las dos aquí: sin fichero de entorno y contra un puerto cerrado.
+# La suite tiene que dar el mismo resultado en cualquier máquina. La
+# configuración del desarrollador se colaba por dos sitios y la ponía roja sin
+# que nadie hubiera tocado código: el fichero ``.env`` y las variables
+# exportadas en la shell. ``Settings`` lee los dos, así que se cierran los dos.
+# Con uno solo no basta: un ``export COMMAND_PREFIX=/`` seguiría entrando.
 Settings.model_config["env_file"] = None
 
-#: Puerto reservado por la IANA como "sin uso": el ping falla al instante y el
-#: buzón cae a memoria, que es lo que los tests asumen.
+for _nombre in [
+    clave
+    for clave in os.environ
+    if clave.upper() in {campo.upper() for campo in Settings.model_fields}
+]:
+    del os.environ[_nombre]
+
+#: URL que nadie va a atender. En los tests no se habla con un Redis real: el
+#: cliente se sustituye en :func:`_sin_redis`, y esto sólo deja constancia de
+#: que ninguna prueba debería salir a la red por aquí.
 UNREACHABLE_REDIS = "redis://127.0.0.1:9/15"
+
+
+@pytest.fixture(autouse=True)
+def _sin_redis(monkeypatch):
+    """El arranque de la aplicación nunca encuentra un Redis en los tests.
+
+    Antes esto dependía de que el puerto estuviera cerrado, y eso es una
+    apuesta: si algo llegara a aceptar la conexión sin contestar, el ping de
+    ``_build_inbox`` no tiene plazo de socket y la suite entera se quedaría
+    colgada sin decir por qué. Se sustituye el cliente por uno que falla al
+    instante, que es lo que hace caer al buzón en memoria.
+    """
+
+    class RedisAusente:
+        async def ping(self) -> bool:
+            raise ConnectionError("sin Redis en los tests")
+
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(app_main, "build_redis_client", lambda settings: RedisAusente())
 
 _counter = itertools.count(1)
 
@@ -253,8 +277,11 @@ class ScriptedPlayers:
             return
 
         if "EL JUICIO" in text and self.debate_lines:
-            for jid, linea in zip(self.jids, self.debate_lines, strict=False):
-                await self._say_group(jid, linea)
+            # Hablan todos, rotando las frases: si sólo hablaran los primeros
+            # de la lista, en las rondas tardías estarían muertos y el juicio
+            # quedaría mudo por accidente, no por lo que el test comprueba.
+            for indice, jid in enumerate(self.jids):
+                await self._say_group(jid, self.debate_lines[indice % len(self.debate_lines)])
             return
 
         if "*VOTACIÓN*" in text:

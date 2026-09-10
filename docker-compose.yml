@@ -10,9 +10,13 @@ services:
     env_file:
       - .env
     environment:
-      # Dentro de la red de compose estos son los nombres de servicio, no
-      # localhost. Sobrescriben lo que haya en .env.
+      # Dentro de la red de compose los servicios se llaman por su nombre, no
+      # localhost, así que estos valores sobrescriben lo que haya en .env.
       REDIS_URL: redis://redis:6379/0
+      # WAHA es la excepción: puede estar fuera del stack (otra máquina, otro
+      # despliegue), así que aquí el .env sí manda. Ojo: si se pone un
+      # localhost pensando en ejecutar la app en el anfitrión, dentro del
+      # contenedor ese localhost es el propio contenedor.
       WAHA_BASE_URL: ${WAHA_BASE_URL:-http://waha:3000}
       DATABASE_URL: sqlite+aiosqlite:////app/data/games.db
       CHECKPOINTER_PATH: /app/data/checkpoints.db

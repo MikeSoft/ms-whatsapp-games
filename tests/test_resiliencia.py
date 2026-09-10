@@ -294,7 +294,7 @@ async def test_el_juicio_no_se_alarga_por_lo_que_tarde_el_narrador():
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(LLMClient, "complete", narrador_lento)
         inicio = asyncio.get_running_loop().time()
-        await nodes._escuchar_juicio("s-lento", 1, [jugador])
+        await nodes._listen_to_debate("s-lento", 1, [jugador])
         tardo = asyncio.get_running_loop().time() - inicio
 
     # Tres comentarios de 0,5 s serializados llevarían esto a ~1,9 s.

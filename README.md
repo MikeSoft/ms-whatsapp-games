@@ -11,7 +11,9 @@ Trae dos juegos:
 | [🐺 El Hombre Lobo](docs/hombreslobo.md) | `#juego hombreslobo` | Los lobos devoran de noche; la aldea lincha de día. Roles por privado, grupo silenciado de noche, votación de día |
 | [🧠 Kahoot](docs/kahoot.md) | `#juego kahoot <tema>` | Concurso de preguntas contrarreloj. El cuestionario lo escribe el modelo y se juega por encuestas |
 
-> Atiende **un solo número** de WhatsApp. No es multi-tenant y no pretende serlo.
+> **Alcance.** Un solo número de bot: el de la sesión de WAHA que se configure.
+> Ese número sí atiende a **varios grupos a la vez** —cada partida es
+> independiente y se juega donde se pide— y obedece a **varios másteres**.
 
 ---
 
@@ -101,8 +103,7 @@ Tres cosas que cuestan un rato averiguar:
 
 ## Comandos
 
-Sólo los aceptan los números de `MANAGER_NUMBER`. El prefijo es configurable
-con `COMMAND_PREFIX` (por defecto `!`).
+Sólo los aceptan los números de `MANAGER_NUMBER`.
 
 | Comando | Qué hace |
 |---|---|
@@ -112,6 +113,9 @@ con `COMMAND_PREFIX` (por defecto `!`).
 | `#estado` | Qué partidas hay en marcha |
 | `#cancelar` | Corta la partida y reabre el grupo |
 | `#ayuda` | Recuerda los comandos |
+
+El prefijo es el que diga `COMMAND_PREFIX`: `.env.example` trae `#`, y si la
+variable falta del todo el código cae en `!`.
 
 Tolera mayúsculas y acentos: `#Juego`, `#CATÁLOGO` y `#cancelar` funcionan
 igual. Lo que se escriba **detrás del nombre** llega al juego como instrucción,
@@ -128,76 +132,20 @@ como cualquier otro.
 
 ## Cómo encaja todo
 
-```
-   WhatsApp
-      │
-      ▼
-   ┌────────┐   webhook    ┌──────────────────────────────────────┐
-   │  WAHA  │─────────────►│  POST /webhooks/waha                 │
-   │        │◄─────────────│  (verifica HMAC → normaliza evento)  │
-   └────────┘  send/poll   └──────────────────┬───────────────────┘
-                                              ▼
-                                     ┌──────────────────┐
-                                     │   Orchestrator   │
-                                     └────────┬─────────┘
-                        ¿comando del máster?  │  ¿mensaje de jugador?
-                         ┌────────────────────┴──────────────────┐
-                         ▼                                       ▼
-                 lanzar / cancelar                       ┌───────────────┐
-                         │                              │ Buzón (Redis) │
-                         ▼                              │  listas + TTL │
-                 ┌───────────────┐   recoge con ventana  └───────┬───────┘
-                 │  El juego     │◄──────────────────────────────┘
-                 └───────┬───────┘──► WAHA (grupo y privados)
-                         │
-             ┌───────────┴───────────┐
-             ▼                       ▼
-      SQLite (histórico)      SQLite (checkpoints)
-```
+El webhook **encola** mensajes y devuelve; el juego los **recoge** dentro de una
+ventana de tiempo, desde una tarea aparte. Por eso WAHA recibe su `200` en
+milisegundos aunque el pueblo tarde un minuto en decidirse, y por eso una
+partida no se cuelga porque alguien se fuera a cenar.
 
-**El desacople es la idea central.** El webhook nunca espera: sólo *encola*
-mensajes. El juego los *recoge* dentro de una ventana de tiempo, y corre en una
-tarea aparte, así que WAHA recibe su 200 en milisegundos aunque el pueblo tarde
-un minuto en decidirse.
+Sobre esa idea se apoyan las dos reglas que explican el resto del diseño: **el
+modelo nunca decide la mecánica** —narra y desambigua, y todo funciona con
+`LLM_PROVIDER=none`— y **toda espera tiene plazo**, para que ningún fallo deje
+el grupo mudo esperando una noche que no termina.
 
-👉 El detalle está en [`docs/architecture.md`](docs/architecture.md): qué hay en
-cada módulo, los contratos que usa un juego, cómo añadir uno nuevo y las reglas
-que no se negocian.
-
----
-
-## Dos decisiones que explican el resto
-
-### El LLM nunca es crítico
-
-**El modelo pone ambientación, el código pone la mecánica.** Quién muere, quién
-vota a quién y quién gana se resuelve con reglas deterministas; el modelo narra
-y desambigua lenguaje coloquial. Todo funciona con `LLM_PROVIDER=none`, y cada
-escena tiene su texto estático de respaldo.
-
-Se pide **por partida**, no se hereda del entorno: tener clave configurada sólo
-deja el modelo disponible, y quien decide gastarlo es el máster con el sufijo
-`ia`. La excepción es el Kahoot, que sin modelo no es lo que promete y lo
-declara en su ficha.
-
-### Nada se cuelga sin límite
-
-Un servicio que dirige una partida por turnos tiene un enemigo claro: quedarse
-esperando para siempre y dejar el grupo silenciado.
-
-- **Cada ventana tiene deadline**, por reloj monótono. Lo que tarde el modelo
-  no puede estirar una fase ni retrasar la siguiente.
-- **Los envíos reintentan menos que las consultas.** Van serializados por el
-  rate limit de WhatsApp, así que insistir en un mensaje retrasa a los demás.
-- **Los envíos masivos tienen presupuesto con techo absoluto**, para cortar a
-  un WAHA patológico en vez de multiplicar su latencia por el nº de jugadores.
-- **La ambientación no puede propagar.** Si el narrador falla, se calla.
-- **Un fallo reabre el grupo y avisa a quien lanzó la partida**, en vez de
-  dejar a la gente muda esperando una noche que no termina.
-
-Cubierto en `tests/test_resiliencia.py`, que ejecuta las rutas de fallo: WAHA
-caído a media partida, transporte lento, relleno que revienta, Redis que se va
-y apagado con partida a medias.
+👉 El diagrama, el mapa de módulos, los contratos que usa un juego, las reglas
+que no se negocian y las cifras de concurrencia están en
+[`docs/architecture.md`](docs/architecture.md). Las rutas de fallo se ejercitan
+en `tests/test_resiliencia.py`.
 
 ---
 
@@ -209,7 +157,7 @@ juego en su documento. Las transversales:
 | Variable | Por defecto | Para qué |
 |---|---|---|
 | `MANAGER_NUMBER` | *(vacío)* | Números que pueden dar órdenes, separados por comas |
-| `COMMAND_PREFIX` | `!` | Prefijo de los comandos |
+| `COMMAND_PREFIX` | `#` en `.env.example` | Prefijo de los comandos |
 | `WAHA_BASE_URL` | `http://waha:3000` | Dónde vive WAHA |
 | `WAHA_SESSION` | `default` | Qué sesión usar |
 | `WAHA_WEBHOOK_HMAC_SECRET` | *(vacío)* | Firma de los webhooks |
@@ -236,8 +184,8 @@ array `mentions`. WhatsApp cruza las dos cosas y lo muestra como una mención
 real, tocable — el nombre visible lo pone el dispositivo de cada lector.
 
 ```
-☠️ @Hugo fue devorado por los lobos — era 🧪 Bruja
-Quien haya caído ya no participa: ignorad lo que escriba.
+☠️ @Hugo queda fuera de la partida
+Ya no participa: ignorad lo que escriba.
 ```
 
 Quita la ambigüedad de los tocayos y de quien no tiene nombre público, y deja
@@ -251,37 +199,16 @@ planos, para motores de WAHA que no resuelvan menciones.
 
 ---
 
-## Desarrollo
-
-```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements-dev.txt
-
-.venv/bin/python -m pytest
-.venv/bin/ruff check app tests
-.venv/bin/uvicorn app.main:app --reload
-```
-
-Los tests corren **sin WAHA, sin Redis y sin LLM**, y sin leer tu `.env` ni tus
-variables de entorno: la suite da el mismo resultado en cualquier máquina.
-`tests/conftest.py` trae un transporte que apunta lo enviado y una mesa de
-jugadores automáticos que lee los privados del bot y responde como lo haría una
-persona. Una partida completa de 11 jugadores tarda milisegundos, así que
-`tests/test_werewolf_flow.py` juega partidas enteras de verdad.
-
-Las reglas de ingeniería están en [`CONTRIBUTING.md`](CONTRIBUTING.md) y son
-autoritativas: ramas, formato de commits, estilo, dónde va cada cosa.
-
----
-
 ## Documentación
 
 | Documento | De qué habla |
 |---|---|
-| [`docs/architecture.md`](docs/architecture.md) | Mapa del código, los contratos de un juego, cómo añadir uno, concurrencia y pruebas |
 | [`docs/hombreslobo.md`](docs/hombreslobo.md) | Roles, reparto, el grafo de fases, la narración y sus límites |
 | [`docs/kahoot.md`](docs/kahoot.md) | La instrucción del comando, generación y validación de preguntas, puntuación |
-| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Cómo contribuir |
+| [`docs/architecture.md`](docs/architecture.md) | Mapa del código, los contratos de un juego, concurrencia |
+| [`docs/juego-nuevo.md`](docs/juego-nuevo.md) | El paso a paso para añadir un juego |
+| [`docs/desarrollo.md`](docs/desarrollo.md) | Entorno, la suite de pruebas y cómo depurar contra WAHA |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Ramas, commits, estilo, dónde va cada cosa |
 
 ---
 

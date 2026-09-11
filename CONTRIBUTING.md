@@ -43,7 +43,7 @@ explica en el PR por qué queda rojo; no lo saltes ni lo borres.
   `tests/test_werewolf_rules.py`.
 - **Un juego nuevo** → `app/games/<juego>/`, registrado con `@register` y
   añadido a `BUILTIN_MODULES`. El paso a paso está en
-  `docs/architecture.md`, y cada juego lleva su documento en `docs/`.
+  `docs/juego-nuevo.md`, y cada juego lleva su documento en `docs/`.
 - **Una ruta de WAHA** → `app/waha/client.py`. En ningún otro sitio se hace
   HTTP contra WAHA.
 - **Un campo de un payload de WAHA** → `app/waha/normalize.py`. El resto del

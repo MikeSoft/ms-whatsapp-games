@@ -103,9 +103,12 @@ class Settings(BaseSettings):
     message_retention_days: int = Field(default=30, ge=0)
 
     # ------------------------------------------------------------------ llm
-    llm_provider: Literal["deepseek", "openai", "none"] = "deepseek"
-    llm_model: str = "deepseek-chat"
-    llm_base_url: str = "https://api.deepseek.com/v1"
+    # Gemini entra por su API compatible con OpenAI, así que el nombre del
+    # proveedor sólo describe a quién se llama: el cliente es el mismo y lo
+    # único que cambia el comportamiento es "none", que lo apaga.
+    llm_provider: Literal["gemini", "deepseek", "openai", "none"] = "gemini"
+    llm_model: str = "gemini-3.8-flash"
+    llm_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
     llm_api_key: str | None = None
     llm_temperature: float = Field(default=0.9, ge=0, le=2)
     llm_max_tokens: int = Field(default=700, ge=64)
@@ -119,7 +122,7 @@ class Settings(BaseSettings):
     # saber a quién atacaron.
     witch_action_seconds: int = Field(default=45, ge=1)
     hunter_action_seconds: int = Field(default=40, ge=1)
-    debate_seconds: int = Field(default=180, ge=1)
+    debate_seconds: int = Field(default=90, ge=1)
     vote_seconds: int = Field(default=30, ge=1)
     # Segundos entre mensajes de ambientación mientras se espera.
     filler_interval_seconds: int = Field(default=25, ge=0)

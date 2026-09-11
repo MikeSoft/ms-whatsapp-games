@@ -126,7 +126,7 @@ class Timers:
     night: float = 60.0
     witch: float = 45.0
     hunter: float = 40.0
-    debate: float = 180.0
+    debate: float = 90.0
     vote: float = 30.0
     filler_interval: float = 25.0
 

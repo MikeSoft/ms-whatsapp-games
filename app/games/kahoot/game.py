@@ -176,9 +176,10 @@ class KahootGame(Game):
         }
         if not cambios:
             return self.ctx.llm
-        # Un proveedor distinto obliga a salir de "deepseek": el cliente sólo
-        # mira que no sea "none", y con base_url y clave propias el nombre del
-        # proveedor deja de describir a quién se llama.
+        # Con base_url y clave propias el nombre del proveedor general deja de
+        # describir a quién se llama, así que se reetiqueta a "openai", que es
+        # el dialecto por el que entran todos. Al cliente sólo le importa que
+        # no sea "none".
         if "llm_base_url" in cambios:
             cambios["llm_provider"] = "openai"
         return LLMClient(settings.model_copy(update=cambios))

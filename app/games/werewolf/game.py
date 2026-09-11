@@ -112,6 +112,11 @@ class WerewolfGame(Game):
         ),
         min_players=4,
         max_players=24,
+        # La narración del modelo es parte de cómo se juega aquí, así que no
+        # se le pide al máster que la encienda con "ia": la partida lo recibe
+        # siempre. Sin LLM_API_KEY el cliente nace apagado y se cae solo a los
+        # textos estáticos de prompts.py.
+        needs_llm=True,
         how_to=(
             "Reparto de roles por privado (lobos, vidente, bruja, cazador, cupido). "
             "De noche el grupo se silencia y los roles actúan por privado; de día "

@@ -163,7 +163,7 @@ juego en su documento. Las transversales:
 | `WAHA_WEBHOOK_HMAC_SECRET` | *(vacío)* | Firma de los webhooks |
 | `WAHA_DRY_RUN` | `false` | Escribe los envíos en el log en vez de mandarlos |
 | `USE_MENTIONS` | `true` | Etiquetar contactos en vez de sólo nombrarlos |
-| `LLM_PROVIDER` | `deepseek` | `deepseek`, `openai` o `none` |
+| `LLM_PROVIDER` | `gemini` | `gemini`, `deepseek`, `openai` o `none` |
 | `MESSAGE_RETENTION_DAYS` | `30` | Purga del histórico al arrancar |
 
 ### Redis y SQLite: para qué cada uno

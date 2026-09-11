@@ -1,8 +1,8 @@
 """Acceso al modelo de lenguaje.
 
-Arranca con DeepSeek por coste, pero al ser compatible con la API de OpenAI
-basta cambiar ``LLM_PROVIDER`` / ``LLM_BASE_URL`` / ``LLM_MODEL`` para usar
-otro proveedor.
+Arranca con Gemini, que se llama por su API compatible con la de OpenAI.
+Cualquier proveedor que hable ese mismo dialecto entra cambiando
+``LLM_PROVIDER`` / ``LLM_BASE_URL`` / ``LLM_MODEL``.
 
 Regla de diseño: **el LLM nunca es crítico**. Da ambientación y ayuda a
 interpretar mensajes libres, pero si falla, se agota el tiempo o no hay clave
@@ -138,7 +138,7 @@ class LLMClient:
         if max_tokens is not None:
             overrides["max_tokens"] = max_tokens
         if json_mode:
-            # DeepSeek y OpenAI comparten este parámetro.
+            # Lo aceptan los proveedores que hablan el dialecto de OpenAI.
             overrides["response_format"] = {"type": "json_object"}
         if reasoning_effort:
             # Sólo lo entienden los modelos que razonan, y no todos los

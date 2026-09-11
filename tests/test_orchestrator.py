@@ -111,14 +111,14 @@ def _cmd(text: str) -> InboundMessage:
     return inbound(MANAGER, text, scope=Scope.GROUP, chat_id=GROUP_ID, name="Máster")
 
 
-async def test_sin_el_flag_de_ia_la_partida_no_usa_el_modelo(orchestrator):
-    """Que haya clave configurada no basta: el gasto lo decide el máster."""
+async def test_el_hombre_lobo_recibe_el_modelo_sin_pedirlo(orchestrator):
+    """Lo declara en su ficha, así que no hace falta escribir "ia"."""
     orch, _outbox, _ = orchestrator(llm_provider="deepseek", llm_api_key="sk-de-prueba")
     assert orch.llm.available is True
 
     await orch.handle(_cmd("#juego hombreslobo"))
     (partida,) = orch._games.values()
-    assert partida.game.ctx.llm.available is False
+    assert partida.game.ctx.llm.available is True
     assert partida.game.ctx.flags == frozenset()
 
     await orch.shutdown()

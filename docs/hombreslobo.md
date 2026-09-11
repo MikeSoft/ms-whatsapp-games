@@ -6,7 +6,11 @@ amanecer y gestiona la votación del día.
 
 - **Comando**: `#juego hombreslobo` · alias `hombres lobo`, `hombre lobo`,
   `loboso`, `lobos`, `lobo`, `werewolf`, `castronegro`, `hl`
-- **Con narración generada**: `#juego hombreslobo ia`
+- **No necesita el sufijo `ia`**: la narración del modelo es parte de
+  cómo se juega, así que lo declara en su ficha (`needs_llm=True`) y el
+  orquestador le entrega el modelo sin que el máster lo pida. Eso sí,
+  **tiene que haber modelo**: sin `LLM_API_KEY` el cliente nace apagado y
+  la partida cae a los textos estáticos. Ver [La narración](#la-narración)
 - **Jugadores**: 4 a 24
 
 ---
@@ -14,7 +18,7 @@ amanecer y gestiona la votación del día.
 ## Cómo se ve una partida
 
 ```
-Máster  ›  #juego hombreslobo ia
+Máster  ›  #juego hombreslobo
 
 Bot     ›  🌫️ Una niebla densa baja de la montaña…
            🐺 EL HOMBRE LOBO — se abren las inscripciones.
@@ -109,10 +113,11 @@ lobos**: su ventana se abre después de la de ellos, no en paralelo.
 
 ## La narración
 
-Con `ia` la escribe el modelo; sin él, salen los textos estáticos de
-`app/games/werewolf/prompts.py`. La partida es idéntica en las dos: **el
-modelo pone ambientación, el código pone la mecánica**. Quién muere, quién
-vota a quién y quién gana no pasa nunca por el modelo.
+La escribe el modelo siempre que haya uno configurado; si no lo hay, salen
+los textos estáticos de `app/games/werewolf/prompts.py`. La partida es
+idéntica en las dos: **el modelo pone ambientación, el código pone la
+mecánica**. Quién muere, quién vota a quién y quién gana no pasa nunca por
+el modelo.
 
 ### El narrador escucha el juicio
 
@@ -161,7 +166,7 @@ Con `MANAGE_GROUP_PERMISSIONS=false` ni se comprueba.
 | `NIGHT_ACTION_SECONDS` | `60` | Ventana de las acciones nocturnas |
 | `WITCH_ACTION_SECONDS` | `45` | Ventana de la bruja, que va después |
 | `HUNTER_ACTION_SECONDS` | `40` | Ventana del cazador al morir |
-| `DEBATE_SECONDS` | `180` | Duración del juicio |
+| `DEBATE_SECONDS` | `90` | Duración del juicio |
 | `VOTE_SECONDS` | `30` | Duración de la votación |
 | `FILLER_INTERVAL_SECONDS` | `25` | Cadencia de la ambientación de espera |
 | `MAX_ROUNDS` | `20` | Cierra una partida abandonada |

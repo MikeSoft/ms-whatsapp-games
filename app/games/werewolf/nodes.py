@@ -21,7 +21,7 @@ from typing import Any
 
 from app.config import Settings
 from app.games.base import GameContext
-from app.games.mentions import GroupText
+from app.games.mentions import GroupText, tag_names
 from app.games.recruit import select_players
 from app.games.werewolf import prompts
 from app.games.werewolf.narrator import Narrator
@@ -73,13 +73,49 @@ def dm_budget(count: int) -> float:
     return min(DM_BUDGET_MAX, max(DM_BUDGET_MIN, DM_BUDGET_PER_MESSAGE * count))
 
 
-#: Cuántas intervenciones del juicio se le pasan al narrador, y de qué largo.
+#: Lo que se le pasa al narrador del juicio se acota por caracteres, no por
+#: número de intervenciones.
 #:
-#: Un minuto de debate en una mesa grande son muchos mensajes, y el prompt no
-#: puede crecer con el tamaño del grupo: se le da la cola de la conversación,
-#: que es la que tiene el calor del momento.
-DEBATE_MAX_LINES = 14
-DEBATE_MAX_CHARS = 160
+#: El contexto del modelo da de sobra para un debate entero, así que lo normal
+#: es que quepa todo y el narrador tenga la conversación completa. El tope
+#: existe para el caso patológico —una avalancha en un grupo grande— donde
+#: crecer sin límite dispararía coste y latencia justo cuando la partida
+#: necesita responder rápido. Al recortar se conserva la cola, que es la que
+#: tiene el calor del momento.
+DEBATE_BUDGET_CHARS = 20_000
+#: Tope por intervención. Un mensaje de WhatsApp rara vez llega aquí; corta
+#: los pegotes de texto sin tocar la conversación real.
+DEBATE_MAX_CHARS = 400
+
+#: Coste aproximado de envolver una intervención en el JSON de los HECHOS
+#: (claves, comillas, comas y sangrado). Sin contarlo, el presupuesto se
+#: quedaría corto justo con las mesas grandes, que es cuando importa.
+_LINE_OVERHEAD_CHARS = 30
+
+
+def trim_to_budget(lineas: list[dict[str, str]]) -> list[dict[str, str]]:
+    """La cola de la conversación que cabe en :data:`DEBATE_BUDGET_CHARS`."""
+    total = 0
+    desde = len(lineas)
+    for indice in range(len(lineas) - 1, -1, -1):
+        linea = lineas[indice]
+        coste = len(linea["quien"]) + len(linea["dijo"]) + _LINE_OVERHEAD_CHARS
+        if total + coste > DEBATE_BUDGET_CHARS:
+            break
+        total += coste
+        desde = indice
+    return lineas[desde:]
+
+
+#: Cada cuánto se sondea el buzón durante el juicio. Más corto que el
+#: intervalo de relleno a propósito: aquí no se espera a ciegas, y cuanto
+#: antes se lea lo que se acaba de decir, antes puede el narrador engancharse.
+DEBATE_SLICE_SECONDS = 8.0
+
+#: Intervenciones nuevas que justifican comentar antes de que toque por reloj.
+#: Un juicio encendido da para varios comentarios; uno apagado se queda con la
+#: cadencia del reloj y no molesta.
+DEBATE_LINES_PER_COMMENT = 4
 
 
 @dataclass(frozen=True)
@@ -160,6 +196,31 @@ class WerewolfNodes:
         )
         if record:
             self._narrated.append(text)
+
+    def _etiqueta_nombres(
+        self, text: str, players: list[Player], texto: GroupText
+    ) -> str:
+        """Convierte en menciones los nombres que el narrador haya escrito.
+
+        El modelo recibe nombres y escribe prosa con ellos; aquí esa prosa
+        pasa a señalar a la persona de verdad. Se ofrecen todos los jugadores
+        y no sólo los vivos: el narrador también habla de quien acaba de caer.
+        """
+        contactos = {
+            p.get("name", ""): p.get("jid", "") for p in players if p.get("name")
+        }
+        return tag_names(text, contactos, texto)
+
+    @staticmethod
+    def _voces(state: WerewolfState) -> dict[str, list[dict[str, str]]]:
+        """Lo último que dijo el pueblo, para que la escena lo recoja.
+
+        Se omite la clave cuando no hay nada —la primera noche, por ejemplo—
+        porque un HECHO vacío sólo invita al modelo a rellenarlo por su
+        cuenta, que es justo lo que no queremos.
+        """
+        dichas = list(state.get("debate_log") or [])
+        return {"se_dijo": dichas} if dichas else {}
 
     def _flush_narrative(self) -> dict[str, list[str]]:
         """Devuelve lo narrado desde la última llamada, para el estado.
@@ -262,8 +323,14 @@ class WerewolfNodes:
         index: int,
         max_words: int = 35,
         extra: dict[str, Any] | None = None,
+        players: list[Player] | None = None,
     ) -> None:
         """Publica ambientación mientras se espera, si aún queda ventana.
+
+        Con ``players`` se etiquetan los nombres que salgan en la narración.
+        La espera de la noche no los pasa —nadie debería ser nombrado ahí—,
+        pero el comentario del juicio vive precisamente de decir quién señaló
+        a quién.
 
         Lo usan las esperas de la noche y el juicio. La cuenta atrás se toma
         del plazo en dos momentos —al pedir el texto y al enviarlo— porque
@@ -288,8 +355,13 @@ class WerewolfNodes:
             restante = deadline - time.monotonic()
             if restante <= 0:
                 return
+            texto = self._texto()
+            if players:
+                text = self._etiqueta_nombres(text, players, texto)
             await self._group(
-                f"{text}\n\n⏳ Quedan ~{_seconds(restante)}.", record=False
+                f"{text}\n\n⏳ Quedan ~{_seconds(restante)}.",
+                record=False,
+                texto=texto,
             )
         except asyncio.CancelledError:
             raise
@@ -538,14 +610,21 @@ class WerewolfNodes:
 
         night = await self.narrator.flavour(
             "noche",
-            {"ronda": round_no, "vivos": len(alive(players))},
+            {
+                "ronda": round_no,
+                "vivos": len(alive(players)),
+                **self._voces(state),
+            },
             fallback=prompts.FALLBACK_NIGHT,
             max_words=70,
         )
+        texto_noche = self._texto()
+        night = self._etiqueta_nombres(night, players, texto_noche)
         await self._group(
             f"🌙 *NOCHE {round_no}*\n\n{night}\n\n"
             f"El grupo está en silencio. Los roles con poder tienen "
-            f"{_seconds(self.timers.night)} para responderme por privado."
+            f"{_seconds(self.timers.night)} para responderme por privado.",
+            texto=texto_noche,
         )
 
         prompts_to_send: list[tuple[str, str]] = []
@@ -1042,6 +1121,7 @@ class WerewolfNodes:
             cuerpo = "🕊️ Esta noche no murió nadie."
 
         vivos = alive(players)
+        flavour = self._etiqueta_nombres(flavour, players, texto)
         await self.ctx.transport.set_group_locked(False)
         await self._group(
             f"🌅 *AMANECE EL DÍA {round_no}*\n\n{flavour}\n\n{cuerpo}\n\n"
@@ -1130,7 +1210,13 @@ class WerewolfNodes:
 
         flavour = await self.narrator.flavour(
             "juicio",
-            {"ronda": round_no, "vivos": [p["name"] for p in alive(players)]},
+            {
+                "ronda": round_no,
+                "vivos": [p["name"] for p in alive(players)],
+                # Lo de la ronda pasada: el juicio nuevo sabe de qué se venía
+                # hablando en lugar de empezar de cero cada día.
+                **self._voces(state),
+            },
             fallback=prompts.FALLBACK_TRIAL,
             max_words=70,
         )
@@ -1143,6 +1229,7 @@ class WerewolfNodes:
         await self.ctx.inbox.clear(state["session_id"], keys=["group"])
 
         texto = self._texto()
+        flavour = self._etiqueta_nombres(flavour, players, texto)
         await self._group(
             f"⚖️ *EL JUICIO — día {round_no}*\n\n{flavour}\n\n"
             f"Tenéis {_seconds(self.timers.debate)} para acusaros. "
@@ -1180,7 +1267,7 @@ class WerewolfNodes:
             if not dicho:
                 continue
             lineas.append({"quien": nombre, "dijo": dicho[:DEBATE_MAX_CHARS]})
-        return lineas[-DEBATE_MAX_LINES:]
+        return trim_to_budget(lineas)
 
     async def _listen_to_debate(
         self, session_id: str, round_no: int, players: list[Player]
@@ -1190,13 +1277,24 @@ class WerewolfNodes:
         Antes se dormía a ciegas y el buzón del grupo se tiraba entero en la
         votación. Recogerlo aquí cuesta lo mismo y da dos cosas: ambientación
         que reacciona a las acusaciones de verdad, y un resumen de lo hablado
-        para el veredicto.
+        que arrastran las escenas siguientes.
+
+        El narrador entra por actividad y no sólo por reloj: cuando se acumulan
+        intervenciones nuevas se comenta antes, con un suelo entre comentarios
+        para que un grupo grande no acabe leyendo más bot que vecinos.
         """
         interval = self.timers.filler_interval
-        # Plazo por reloj, no suma de esperas: lo que tarde el narrador no
-        # puede estirar el juicio ni retrasar la votación.
         deadline = time.monotonic() + self.timers.debate
+        # Sondeo corto para engancharse a lo recién dicho; margen al final para
+        # no publicar encima de la encuesta; suelo entre comentarios.
+        tramo_max = min(interval, DEBATE_SLICE_SECONDS) if interval > 0 else 0.0
+        margen = tramo_max * 0.5
+        hueco = interval * 0.5
+
         lineas: list[dict[str, str]] = []
+        dichas = 0
+        dichas_al_comentar = 0
+        ultimo = time.monotonic()
         index = 0
         comentario: asyncio.Task[None] | None = None
 
@@ -1205,41 +1303,45 @@ class WerewolfNodes:
                 restante = deadline - time.monotonic()
                 if restante <= 0:
                     break
-                tramo = restante if interval <= 0 else min(interval, restante)
+                tramo = restante if interval <= 0 else min(tramo_max, restante)
                 recogido = await self.ctx.inbox.collect(
                     session_id, timeout=tramo, group=True
                 )
                 # Se reduce a líneas en cada tramo y se guarda sólo la cola: en
                 # un grupo grande, retener los mensajes crudos del debate
-                # entero es cargar con el payload de WAHA de cada uno para
-                # acabar usando las últimas catorce.
-                lineas = (lineas + self._debate_lines(recogido, players))[
-                    -DEBATE_MAX_LINES:
-                ]
+                # entero es cargar con el payload de WAHA de cada uno.
+                nuevas = self._debate_lines(recogido, players)
+                dichas += len(nuevas)
+                lineas = trim_to_budget(lineas + nuevas)
 
-                restante = deadline - time.monotonic()
-                # No se comenta si queda menos de medio tramo: el mensaje
-                # llegaría pisado por la votación. La guarda es proporcional al
-                # intervalo y no absoluta, que con los tiempos reales da lo
-                # mismo (25 s -> 12,5) y deja la ruta ejercitable en un test de
-                # milisegundos.
-                if interval <= 0 or restante <= interval * 0.5:
+                if interval <= 0 or deadline - time.monotonic() <= margen:
                     continue
-                # En una tarea aparte y sólo si la anterior ya acabó: el
-                # comentario acompaña al juicio, no lo bloquea, y un modelo
-                # lento no acumula llamadas encoladas.
-                if comentario is None or comentario.done():
-                    comentario = asyncio.create_task(
-                        self._ambience(
-                            "debate",
-                            round_no=round_no,
-                            deadline=deadline,
-                            index=index,
-                            max_words=45,
-                            extra={"se_dijo": list(lineas)},
-                        )
+                # Sin encadenar llamadas: si la anterior sigue en vuelo, se
+                # deja pasar este tramo.
+                if comentario is not None and not comentario.done():
+                    continue
+                desde_el_ultimo = time.monotonic() - ultimo
+                hay_novedad = dichas - dichas_al_comentar >= DEBATE_LINES_PER_COMMENT
+                if not (
+                    (hay_novedad and desde_el_ultimo >= hueco)
+                    or desde_el_ultimo >= interval
+                ):
+                    continue
+
+                comentario = asyncio.create_task(
+                    self._ambience(
+                        "debate",
+                        round_no=round_no,
+                        deadline=deadline,
+                        index=index,
+                        max_words=45,
+                        extra={"se_dijo": list(lineas)},
+                        players=players,
                     )
-                    index += 1
+                )
+                dichas_al_comentar = dichas
+                ultimo = time.monotonic()
+                index += 1
         finally:
             if comentario is not None:
                 await self._stop_task(comentario)
@@ -1333,10 +1435,15 @@ class WerewolfNodes:
         if lynched_jid is None:
             flavour = await self.narrator.flavour(
                 "sin_linchamiento",
-                {"ronda": round_no, "empate": len(top) > 1},
+                {
+                    "ronda": round_no,
+                    "empate": len(top) > 1,
+                    **self._voces(state),
+                },
                 fallback=prompts.FALLBACK_NO_LYNCH,
                 max_words=60,
             )
+            flavour = self._etiqueta_nombres(flavour, players, texto_recuento)
             await self._group(
                 f"⚖️ *VEREDICTO*\n\n{recuento}\n\n{flavour}\n\n"
                 "🤷 Hoy no se lincha a nadie.",
@@ -1381,6 +1488,7 @@ class WerewolfNodes:
             max_words=80,
         )
 
+        flavour = self._etiqueta_nombres(flavour, players, texto_recuento)
         lineas = [f"⚖️ *VEREDICTO — día {round_no}*", "", recuento, "", flavour, ""]
         for death in deaths:
             victim = by_jid(players, death["jid"])
@@ -1449,12 +1557,14 @@ class WerewolfNodes:
                 "ganador": winner,
                 "supervivientes": supervivientes,
                 "rondas": state["round_no"],
+                **self._voces(state),
             },
             fallback=fallback,
             max_words=100,
         )
 
         texto = self._texto()
+        flavour = self._etiqueta_nombres(flavour, players, texto)
         await self._group(
             f"{titular}\n\n{flavour}\n\n"
             f"🎭 *Todos los roles:*\n{public_summary(players, texto)}\n\n"

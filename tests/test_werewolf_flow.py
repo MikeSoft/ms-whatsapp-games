@@ -14,8 +14,8 @@ from app.core.inbox import MemoryInbox
 from app.core.llm import LLMClient
 from app.games.werewolf.game import WerewolfGame
 from app.games.werewolf.nodes import (
+    DEBATE_BUDGET_CHARS,
     DEBATE_MAX_CHARS,
-    DEBATE_MAX_LINES,
     Timers,
     WerewolfNodes,
 )
@@ -453,8 +453,13 @@ async def test_el_narrador_no_oye_a_los_muertos_ni_al_propio_bot():
     assert lineas == [{"quien": "Viva", "dijo": "sospecho de alguien"}]
 
 
-async def test_lo_hablado_se_acota_en_numero_y_longitud():
-    """El prompt no puede crecer con el tamaño de la mesa."""
+async def test_lo_hablado_se_acota_por_presupuesto_de_caracteres():
+    """Un debate normal entra entero; una avalancha se recorta por la cola.
+
+    El tope no está para resumir la conversación —el contexto del modelo da
+    de sobra— sino para que un grupo grande desbocado no dispare coste y
+    latencia justo cuando la partida tiene que responder rápido.
+    """
     transport = FakeTransport()
     ctx = make_context(transport=transport, inbox=MemoryInbox(), session_id="s-tope")
     nodes = WerewolfNodes(ctx, timers=fast_timers())
@@ -467,10 +472,18 @@ async def test_lo_hablado_se_acota_en_numero_y_longitud():
 
     lineas = nodes._debate_lines(muchos, [jugador])
 
-    assert len(lineas) == DEBATE_MAX_LINES
     assert all(len(linea["dijo"]) <= DEBATE_MAX_CHARS for linea in lineas)
+    gastado = sum(len(x["quien"]) + len(x["dijo"]) + 30 for x in lineas)
+    assert gastado <= DEBATE_BUDGET_CHARS
     # Se queda la cola de la conversación, que es la que tiene el calor.
     assert lineas[-1]["dijo"].startswith("mensaje 39")
+
+    # Una conversación de tamaño normal no se toca: entra completa.
+    normal = [
+        inbound(jugador["jid"], f"intervención {i}", scope=Scope.GROUP)
+        for i in range(60)
+    ]
+    assert len(nodes._debate_lines(normal, [jugador])) == 60
 
 
 async def test_el_relleno_del_juicio_comenta_lo_que_se_esta_diciendo(monkeypatch):

@@ -14,7 +14,7 @@ import re
 import httpx
 import pytest
 
-from app.games.mentions import GroupText, digits_of, mention_token
+from app.games.mentions import GroupText, digits_of, mention_token, tag_names
 from app.games.werewolf.game import WerewolfGame
 from app.games.werewolf.state import tag, tagged_label, tagged_roster
 from app.waha.client import WahaClient
@@ -214,3 +214,45 @@ async def test_el_juego_termina_igual_con_o_sin_menciones(table, activadas):
     assert result.status == "finished"
     assert result.winner in {"lobos", "pueblo", "enamorados", "nadie"}
     assert transport.locked is False
+
+
+# =====================================================================
+# Nombres que el narrador escribe en prosa
+# =====================================================================
+def test_los_nombres_de_la_narracion_se_convierten_en_menciones():
+    """El modelo escribe "Ana acusa a Beto"; el grupo ve dos menciones."""
+    texto = GroupText(enabled=True)
+    contactos = {"Ana": "573001@c.us", "Beto": "573002@c.us"}
+
+    salida = tag_names("Ana señala a Beto y Beto calla.", contactos, texto)
+
+    assert salida == "@573001 señala a @573002 y @573002 calla."
+    # Una sola vez cada uno, en orden de aparición.
+    assert texto.mentions == ["573001@c.us", "573002@c.us"]
+
+
+def test_el_nombre_mas_largo_gana_y_no_se_parten_palabras():
+    """"Ana María" no puede quedar como una mención de Ana más " María"."""
+    texto = GroupText(enabled=True)
+    contactos = {"Ana": "573001@c.us", "Ana María": "573002@c.us"}
+
+    salida = tag_names("Ana María mira a Ana. Ananás no es nadie.", contactos, texto)
+
+    assert salida == "@573002 mira a @573001. Ananás no es nadie."
+
+
+def test_etiquetar_funciona_con_identificadores_lid():
+    """Los grupos nuevos de WhatsApp identifican a la gente por @lid."""
+    texto = GroupText(enabled=True)
+    salida = tag_names("Jb tiene la palabra.", {"Jb": "13817111126136@lid"}, texto)
+
+    assert salida == "@13817111126136 tiene la palabra."
+    assert texto.mentions == ["13817111126136@lid"]
+
+
+def test_con_menciones_desactivadas_la_narracion_queda_intacta():
+    texto = GroupText(enabled=False)
+    salida = tag_names("Ana acusa a Beto.", {"Ana": "573001@c.us"}, texto)
+
+    assert salida == "Ana acusa a Beto."
+    assert texto.mentions == []

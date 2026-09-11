@@ -15,6 +15,7 @@ Es genérico a propósito: cualquier juego futuro compone así sus mensajes.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 
@@ -26,6 +27,40 @@ def digits_of(jid: str) -> str:
 def mention_token(jid: str) -> str:
     """El token que WhatsApp sustituye por el nombre del contacto."""
     return f"@{digits_of(jid)}"
+
+
+def tag_names(text: str, contacts: dict[str, str], texto: GroupText) -> str:
+    """Etiqueta en un texto libre los nombres de ``contacts`` (nombre -> JID).
+
+    Es para lo que escribe el narrador: el modelo nombra a la gente en prosa y
+    aquí ese nombre pasa a ser una mención real, tocable, en vez de texto
+    plano. Dos precauciones que importan: los nombres se prueban de más largo
+    a más corto, para que "Ana María" no acabe etiquetada como "Ana" dejando
+    un " María" suelto; y se exige límite de palabra, para no destrozar otra
+    palabra que contenga el nombre por dentro.
+
+    Con las menciones desactivadas :meth:`GroupText.tag` devuelve el nombre tal
+    cual, así que esto se vuelve una operación nula.
+    """
+    if not text or not contacts:
+        return text
+
+    por_jid = {nombre.casefold(): jid for nombre, jid in contacts.items() if nombre}
+    if not por_jid:
+        return text
+
+    patron = re.compile(
+        r"(?<!\w)(" + "|".join(re.escape(n) for n in sorted(por_jid, key=len, reverse=True))
+        + r")(?!\w)",
+        re.IGNORECASE,
+    )
+
+    def _sustituye(match: re.Match[str]) -> str:
+        encontrado = match.group(1)
+        jid = por_jid.get(encontrado.casefold())
+        return texto.tag(jid, encontrado) if jid else encontrado
+
+    return patron.sub(_sustituye, text)
 
 
 @dataclass

@@ -20,42 +20,42 @@ from tests.conftest import GROUP_ID, MANAGER, inbound, make_jid, make_settings
 
 # ================================================================= comandos
 def test_parseo_de_comandos_tolera_mayusculas_y_acentos():
-    assert parse_command("!juego hombreslobo").name == "juego"
-    assert parse_command("!JUEGO lobos").args == ["lobos"]
-    assert parse_command("!catálogo").name == "juegos"
-    assert parse_command("!Cancelar").name == "cancelar"
-    assert parse_command("!juego hombres lobo").argument == "hombres lobo"
+    assert parse_command("#juego hombreslobo").name == "juego"
+    assert parse_command("#JUEGO lobos").args == ["lobos"]
+    assert parse_command("#catálogo").name == "juegos"
+    assert parse_command("#Cancelar").name == "cancelar"
+    assert parse_command("#juego hombres lobo").argument == "hombres lobo"
 
 
 def test_lo_que_no_es_comando_no_se_confunde():
     assert parse_command("juego sin prefijo") is None
-    assert parse_command("!") is None
+    assert parse_command("#") is None
     assert parse_command("") is None
-    assert parse_command("!noexiste") is None
-    assert parse_command("hola !juego") is None
+    assert parse_command("#noexiste") is None
+    assert parse_command("hola #juego") is None
 
 
 def test_el_prefijo_es_configurable():
     assert parse_command("/juego lobos", prefix="/").name == "juego"
-    assert parse_command("!juego lobos", prefix="/") is None
+    assert parse_command("#juego lobos", prefix="/") is None
 
 
 def test_el_flag_de_ia_no_se_confunde_con_el_nombre_del_juego():
     """Un nombre puede llevar varias palabras, así que el flag se separa."""
-    con_ia = parse_command("!juego hombreslobo ia")
+    con_ia = parse_command("#juego hombreslobo ia")
     assert con_ia.argument == "hombreslobo"
     assert con_ia.has("ia")
 
     # El nombre de dos palabras sigue llegando entero.
-    largo = parse_command("!juego hombres lobo IA")
+    largo = parse_command("#juego hombres lobo IA")
     assert largo.argument == "hombres lobo"
     assert largo.has("ia")
 
     # Va donde sea y admite las otras formas.
-    assert parse_command("!juego ai hombreslobo").argument == "hombreslobo"
-    assert parse_command("!juego hombreslobo llm").has("ia")
+    assert parse_command("#juego ai hombreslobo").argument == "hombreslobo"
+    assert parse_command("#juego hombreslobo llm").has("ia")
 
-    sin_ia = parse_command("!juego hombreslobo")
+    sin_ia = parse_command("#juego hombreslobo")
     assert sin_ia.argument == "hombreslobo"
     assert not sin_ia.has("ia")
 
@@ -116,7 +116,7 @@ async def test_sin_el_flag_de_ia_la_partida_no_usa_el_modelo(orchestrator):
     orch, _outbox, _ = orchestrator(llm_provider="deepseek", llm_api_key="sk-de-prueba")
     assert orch.llm.available is True
 
-    await orch.handle(_cmd("!juego hombreslobo"))
+    await orch.handle(_cmd("#juego hombreslobo"))
     (partida,) = orch._games.values()
     assert partida.game.ctx.llm.available is False
     assert partida.game.ctx.flags == frozenset()
@@ -127,7 +127,7 @@ async def test_sin_el_flag_de_ia_la_partida_no_usa_el_modelo(orchestrator):
 async def test_con_el_flag_de_ia_la_partida_recibe_el_modelo(orchestrator):
     orch, outbox, _ = orchestrator(llm_provider="deepseek", llm_api_key="sk-de-prueba")
 
-    await orch.handle(_cmd("!juego hombreslobo ia"))
+    await orch.handle(_cmd("#juego hombreslobo ia"))
     (partida,) = orch._games.values()
     assert partida.game.ctx.llm.available is True
     assert partida.game.ctx.flags == frozenset({"ia"})
@@ -140,7 +140,7 @@ async def test_pedir_ia_sin_clave_configurada_no_rompe_la_partida(orchestrator):
     """Se lanza igual, con narrativa estática: el LLM nunca es crítico."""
     orch, outbox, _ = orchestrator()
 
-    await orch.handle(_cmd("!juego hombreslobo ia"))
+    await orch.handle(_cmd("#juego hombreslobo ia"))
     (partida,) = orch._games.values()
     assert partida.game.ctx.llm.available is False
     assert any("narración estática" in text for _, text in outbox)
@@ -151,7 +151,7 @@ async def test_pedir_ia_sin_clave_configurada_no_rompe_la_partida(orchestrator):
 async def test_solo_el_master_puede_lanzar_una_partida(orchestrator):
     orch, outbox, _ = orchestrator()
     intruso = inbound(
-        "573009999999@c.us", "!juego hombreslobo", scope=Scope.GROUP, chat_id=GROUP_ID
+        "573009999999@c.us", "#juego hombreslobo", scope=Scope.GROUP, chat_id=GROUP_ID
     )
     await orch.handle(intruso)
 
@@ -162,10 +162,10 @@ async def test_solo_el_master_puede_lanzar_una_partida(orchestrator):
 
 async def test_lanzar_dos_veces_el_mismo_juego_se_rechaza(orchestrator):
     orch, outbox, _ = orchestrator()
-    await orch.handle(_cmd("!juego hombreslobo"))
+    await orch.handle(_cmd("#juego hombreslobo"))
     assert len(orch.snapshot()["partidas_activas"]) == 1
 
-    await orch.handle(_cmd("!juego hombreslobo"))
+    await orch.handle(_cmd("#juego hombreslobo"))
     assert len(orch.snapshot()["partidas_activas"]) == 1
     assert any("Ya hay una partida" in text for _, text in outbox)
 
@@ -175,7 +175,7 @@ async def test_lanzar_dos_veces_el_mismo_juego_se_rechaza(orchestrator):
 async def test_partida_sin_jugadores_se_cierra_y_libera_el_grupo(orchestrator):
     """Nadie dice "Yo": la partida aborta y no deja el grupo silenciado."""
     orch, outbox, locks = orchestrator()
-    await orch.handle(_cmd("!juego hombreslobo"))
+    await orch.handle(_cmd("#juego hombreslobo"))
 
     running = next(iter(orch._games.values()))
     await asyncio.wait_for(running.task, timeout=15)
@@ -192,7 +192,7 @@ async def test_partida_sin_jugadores_se_cierra_y_libera_el_grupo(orchestrator):
 async def test_los_jugadores_se_inscriben_por_el_webhook(orchestrator):
     """Los "Yo" que llegan del webhook entran al buzón y forman la mesa."""
     orch, outbox, locks = orchestrator()
-    await orch.handle(_cmd("!juego hombreslobo"))
+    await orch.handle(_cmd("#juego hombreslobo"))
 
     # Cinco personas se apuntan mientras corre la ventana de inscripción.
     for index in range(1, 6):
@@ -221,10 +221,10 @@ async def test_los_jugadores_se_inscriben_por_el_webhook(orchestrator):
 
 async def test_cancelar_corta_la_partida_y_reabre_el_grupo(orchestrator):
     orch, outbox, locks = orchestrator()
-    await orch.handle(_cmd("!juego hombreslobo"))
+    await orch.handle(_cmd("#juego hombreslobo"))
     assert len(orch.snapshot()["partidas_activas"]) == 1
 
-    await orch.handle(_cmd("!cancelar"))
+    await orch.handle(_cmd("#cancelar"))
 
     assert orch.snapshot()["partidas_activas"] == []
     texto = "\n".join(text for _, text in outbox)
@@ -238,7 +238,7 @@ async def test_cancelar_corta_la_partida_y_reabre_el_grupo(orchestrator):
 async def test_los_mensajes_del_propio_bot_no_vuelven_al_juego(orchestrator):
     """Sin este corte, los mensajes del máster crearían un bucle."""
     orch, _, _ = orchestrator()
-    await orch.handle(_cmd("!juego hombreslobo"))
+    await orch.handle(_cmd("#juego hombreslobo"))
     running = next(iter(orch._games.values()))
 
     propio = inbound("573000000001@c.us", "Yo", scope=Scope.GROUP, chat_id=GROUP_ID)
@@ -254,7 +254,7 @@ async def test_los_mensajes_del_propio_bot_no_vuelven_al_juego(orchestrator):
 
 async def test_los_duplicados_del_webhook_se_descartan(orchestrator):
     orch, _, _ = orchestrator()
-    await orch.handle(_cmd("!juego hombreslobo"))
+    await orch.handle(_cmd("#juego hombreslobo"))
     running = next(iter(orch._games.values()))
 
     mensaje = inbound(make_jid(1), "Yo", scope=Scope.GROUP, chat_id=GROUP_ID)
@@ -270,7 +270,7 @@ async def test_los_duplicados_del_webhook_se_descartan(orchestrator):
 
 async def test_un_privado_llega_al_buzon_del_jugador(orchestrator):
     orch, _, _ = orchestrator()
-    await orch.handle(_cmd("!juego hombreslobo"))
+    await orch.handle(_cmd("#juego hombreslobo"))
     running = next(iter(orch._games.values()))
 
     jugador = make_jid(3)
@@ -287,7 +287,7 @@ async def test_un_privado_llega_al_buzon_del_jugador(orchestrator):
 
 async def test_apagar_el_servicio_cancela_las_partidas(orchestrator):
     orch, _, locks = orchestrator()
-    await orch.handle(_cmd("!juego hombreslobo"))
+    await orch.handle(_cmd("#juego hombreslobo"))
     assert len(orch.snapshot()["partidas_activas"]) == 1
 
     await orch.shutdown()
@@ -305,7 +305,7 @@ async def test_se_juega_en_el_grupo_desde_el_que_se_lanza(orchestrator):
     orch, outbox, _ = orchestrator()
 
     await orch.handle(
-        inbound(MANAGER, "!juego hombreslobo", scope=Scope.GROUP, chat_id=otro,
+        inbound(MANAGER, "#juego hombreslobo", scope=Scope.GROUP, chat_id=otro,
                 name="Máster")
     )
 
@@ -325,7 +325,7 @@ async def test_por_privado_no_se_adivina_el_grupo(orchestrator):
     """
     orch, outbox, _ = orchestrator()
 
-    await orch.handle(inbound(MANAGER, "!juego hombreslobo", scope=Scope.DIRECT))
+    await orch.handle(inbound(MANAGER, "#juego hombreslobo", scope=Scope.DIRECT))
 
     assert orch.snapshot()["partidas_activas"] == []
     assert any("se juega donde se pide" in text for _, text in outbox)
@@ -368,18 +368,18 @@ async def test_el_segundo_master_lanza_y_el_resto_sigue_sin_poder(orchestrator):
 
     # Daniela lanza.
     await orch.handle(
-        inbound(DANIELA, "!juego hombreslobo", scope=Scope.GROUP, chat_id=GROUP_ID)
+        inbound(DANIELA, "#juego hombreslobo", scope=Scope.GROUP, chat_id=GROUP_ID)
     )
     assert len(orch.snapshot()["partidas_activas"]) == 1
 
     # Alguien que no está en la lista, no.
     await orch.handle(
-        inbound("573009999999@c.us", "!cancelar", scope=Scope.GROUP, chat_id=GROUP_ID)
+        inbound("573009999999@c.us", "#cancelar", scope=Scope.GROUP, chat_id=GROUP_ID)
     )
     assert len(orch.snapshot()["partidas_activas"]) == 1
 
     # Y Mike puede cancelar lo que lanzó Daniela.
-    await orch.handle(_cmd("!cancelar"))
+    await orch.handle(_cmd("#cancelar"))
     assert orch.snapshot()["partidas_activas"] == []
     assert any("cancelada" in text.lower() for _, text in outbox)
 
@@ -402,7 +402,7 @@ async def test_el_aviso_de_fallo_va_a_quien_lanzo_la_partida(orchestrator, monke
 
     # Lanza Daniela.
     await orch.handle(
-        inbound(DANIELA, "!juego hombreslobo", scope=Scope.GROUP, chat_id=GROUP_ID)
+        inbound(DANIELA, "#juego hombreslobo", scope=Scope.GROUP, chat_id=GROUP_ID)
     )
     await asyncio.sleep(0.1)
 

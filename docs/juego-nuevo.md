@@ -45,6 +45,10 @@ class MiJuego(Game):
         min_players=3,
         max_players=20,
         how_to="Cómo funciona, para el menú de #juegos.",
+        # Sólo si tu juego no tiene sentido sin modelo, como el concurso: lo
+        # recibe sin que el máster escriba "ia". Ojo, esto no enciende nada:
+        # si el despliegue no tiene LLM_API_KEY, el cliente llega apagado.
+        needs_llm=False,
     )
 
     async def run(self) -> GameResult:

@@ -1,6 +1,6 @@
 """Registro de juegos disponibles.
 
-Resuelve el nombre que escribe el manager (``!juego hombres lobo``) contra la
+Resuelve el nombre que escribe el manager (``#juego hombres lobo``) contra la
 clave y los alias de cada juego, tolerando acentos, guiones y mayúsculas.
 """
 
@@ -77,8 +77,8 @@ def resolve_prefix(words: list[str]) -> tuple[type[Game] | None, list[str]]:
     """Separa el juego de lo que el máster escribió detrás.
 
     Hace falta porque las dos cosas viven en la misma línea y ninguna tiene
-    delimitador: ``!juego hombres lobo`` es un nombre de dos palabras, y
-    ``!juego kahoot preguntas de cine`` es un nombre de una y una instrucción
+    delimitador: ``#juego hombres lobo`` es un nombre de dos palabras, y
+    ``#juego kahoot preguntas de cine`` es un nombre de una y una instrucción
     de tres. Se prueba el prefijo más largo primero, así que un nombre
     compuesto gana sobre su primera palabra.
     """

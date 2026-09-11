@@ -199,7 +199,7 @@ async def test_una_partida_que_falla_reabre_el_grupo_y_avisa_al_master(orq, monk
     monkeypatch.setattr(WahaTransport, "send_group", envio_roto)
 
     await orch.handle(
-        inbound(MANAGER, "!juego hombreslobo", scope=Scope.GROUP, chat_id=GROUP_ID)
+        inbound(MANAGER, "#juego hombreslobo", scope=Scope.GROUP, chat_id=GROUP_ID)
     )
     for index in range(1, 6):
         await orch.handle(
@@ -224,7 +224,7 @@ async def test_una_partida_que_falla_reabre_el_grupo_y_avisa_al_master(orq, monk
 async def test_apagar_con_una_partida_a_medias_no_deja_nada_colgado(orq):
     orch, _outbox, locks = orq
     await orch.handle(
-        inbound(MANAGER, "!juego hombreslobo", scope=Scope.GROUP, chat_id=GROUP_ID)
+        inbound(MANAGER, "#juego hombreslobo", scope=Scope.GROUP, chat_id=GROUP_ID)
     )
     running = next(iter(orch._games.values()))
 

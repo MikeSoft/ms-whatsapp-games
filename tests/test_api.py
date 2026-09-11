@@ -109,7 +109,7 @@ def test_webhook_rechaza_firma_hmac_invalida(sent):
     with build_client(waha_webhook_hmac_secret=HMAC_SECRET) as client:
         response = client.post(
             "/webhooks/waha",
-            json=message_event("!juegos"),
+            json=message_event("#juegos"),
             headers={"X-Webhook-Hmac": "0" * 128, "X-Webhook-Hmac-Algorithm": "sha512"},
         )
     assert response.status_code == 401
@@ -117,7 +117,7 @@ def test_webhook_rechaza_firma_hmac_invalida(sent):
 
 
 def test_webhook_acepta_firma_hmac_valida(sent):
-    event = message_event("!juegos")
+    event = message_event("#juegos")
     body = json.dumps(event).encode()
     with build_client(waha_webhook_hmac_secret=HMAC_SECRET) as client:
         response = client.post(
@@ -131,7 +131,7 @@ def test_webhook_acepta_firma_hmac_valida(sent):
 
 def test_webhook_exige_hmac_cuando_esta_configurado(sent):
     with build_client(waha_webhook_hmac_secret=HMAC_SECRET) as client:
-        response = client.post("/webhooks/waha", json=message_event("!juegos"))
+        response = client.post("/webhooks/waha", json=message_event("#juegos"))
     assert response.status_code == 401
     assert "falta" in response.json()["detail"]
 
@@ -140,12 +140,12 @@ def test_webhook_valida_el_secreto_compartido(sent):
     with build_client(webhook_shared_secret="s3cr3t") as client:
         malo = client.post(
             "/webhooks/waha",
-            json=message_event("!juegos"),
+            json=message_event("#juegos"),
             headers={"X-Webhook-Secret": "otro"},
         )
         bueno = client.post(
             "/webhooks/waha",
-            json=message_event("!juegos", message_id="evt-2"),
+            json=message_event("#juegos", message_id="evt-2"),
             headers={"X-Webhook-Secret": "s3cr3t"},
         )
     assert malo.status_code == 401
@@ -176,7 +176,7 @@ def test_payload_ilegible_devuelve_422(sent):
 
 def test_el_master_puede_listar_juegos_por_whatsapp(sent):
     with build_client() as client:
-        response = client.post("/webhooks/waha", json=message_event("!juegos"))
+        response = client.post("/webhooks/waha", json=message_event("#juegos"))
     assert response.status_code == 200
     respuestas = [text for _, text in sent]
     assert any("Juegos disponibles" in text for text in respuestas)
@@ -186,19 +186,19 @@ def test_el_master_puede_listar_juegos_por_whatsapp(sent):
 def test_comando_de_un_numero_ajeno_se_ignora(sent):
     ajeno = "573009999999@c.us"
     with build_client() as client:
-        client.post("/webhooks/waha", json=message_event("!juegos", sender=ajeno))
+        client.post("/webhooks/waha", json=message_event("#juegos", sender=ajeno))
     assert sent == [], "sólo el número del máster puede dar órdenes"
 
 
 def test_comando_desconocido_no_se_confunde_con_uno_valido(sent):
     with build_client() as client:
-        client.post("/webhooks/waha", json=message_event("!inventado"))
+        client.post("/webhooks/waha", json=message_event("#inventado"))
     assert sent == []
 
 
 def test_estado_sin_partidas(sent):
     with build_client() as client:
-        client.post("/webhooks/waha", json=message_event("!estado"))
+        client.post("/webhooks/waha", json=message_event("#estado"))
         snapshot = client.get("/status").json()
     assert any("No hay ninguna partida" in text for _, text in sent)
     assert snapshot["partidas_activas"] == []
@@ -207,21 +207,21 @@ def test_estado_sin_partidas(sent):
 
 def test_ayuda_lista_los_comandos(sent):
     with build_client() as client:
-        client.post("/webhooks/waha", json=message_event("!ayuda"))
+        client.post("/webhooks/waha", json=message_event("#ayuda"))
     texto = "\n".join(text for _, text in sent)
-    assert "!juego" in texto and "!cancelar" in texto
+    assert "#juego" in texto and "#cancelar" in texto
 
 
 def test_juego_desconocido_avisa_al_master(sent):
     with build_client() as client:
-        client.post("/webhooks/waha", json=message_event("!juego parchis"))
+        client.post("/webhooks/waha", json=message_event("#juego parchis"))
     texto = "\n".join(text for _, text in sent)
     assert "No conozco el juego" in texto
 
 
 def test_cancelar_sin_partida_lo_dice(sent):
     with build_client() as client:
-        client.post("/webhooks/waha", json=message_event("!cancelar"))
+        client.post("/webhooks/waha", json=message_event("#cancelar"))
     assert any("No había ninguna partida" in text for _, text in sent)
 
 
@@ -234,7 +234,7 @@ def test_un_fallo_interno_devuelve_202_y_no_500(sent, monkeypatch):
     monkeypatch.setattr(Orchestrator, "handle", handle_roto)
 
     with build_client() as client:
-        response = client.post("/webhooks/waha", json=message_event("!juegos"))
+        response = client.post("/webhooks/waha", json=message_event("#juegos"))
 
     assert response.status_code == 202
     body = response.json()
@@ -244,7 +244,7 @@ def test_un_fallo_interno_devuelve_202_y_no_500(sent, monkeypatch):
 
 def test_mensajes_repetidos_se_procesan_una_sola_vez(sent):
     """WAHA reintenta entregas; un "Yo" contado dos veces falsearía la leva."""
-    event = message_event("!juegos", message_id="mismo-id")
+    event = message_event("#juegos", message_id="mismo-id")
     with build_client() as client:
         client.post("/webhooks/waha", json=event)
         primera = len(sent)

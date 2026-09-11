@@ -117,13 +117,24 @@ ni imports cruzados entre juegos.
 await ctx.transport.send_group("🌙 Cae la noche")           # al grupo
 await ctx.transport.send_group(texto, mentions=[jid, ...])  # etiquetando
 await ctx.transport.send_direct(jid, "Tu rol es…")          # privado
-ok = await ctx.transport.send_poll("¿Quién?", ["1. Ana", "2. Beto"])
+poll_id = await ctx.transport.send_poll("¿Quién?", ["1. Ana", "2. Beto"])
+await ctx.transport.delete_group_message(poll_id)           # retirarla
+nombre = await ctx.transport.contact_name(jid)              # None si no se sabe
 await ctx.transport.set_group_locked(True)                  # silenciar
 ```
 
-Ningún envío lanza excepción por un fallo de WhatsApp: `send_poll` y
-`set_group_locked` devuelven `False` y el juego debe seguir. **Un privado que
-no llega significa que ese jugador no actúa, no que la partida se rompe.**
+Ningún envío lanza excepción por un fallo de WhatsApp: el juego debe seguir con
+lo que le devuelvan. **Un privado que no llega significa que ese jugador no
+actúa, no que la partida se rompe.**
+
+Cuidado con lo que devuelve cada uno:
+
+| Método | Devuelve | El caso raro |
+|---|---|---|
+| `send_poll` | el id de la encuesta, o `None` | Puede venir **cadena vacía**: la encuesta se publicó pero WAHA no dio id, así que luego no se podrá retirar |
+| `delete_group_message` | `bool` | — |
+| `set_group_locked` | `bool` | `False` también cuando el bot no es administrador |
+| `contact_name` | el nombre, o `None` | Un voto de encuesta no trae nombre, y en grupos nuevos el votante llega como `@lid` |
 
 Para etiquetar, compón el texto con `GroupText` y pásale la lista acumulada:
 

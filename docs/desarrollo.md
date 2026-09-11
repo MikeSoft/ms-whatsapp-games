@@ -50,6 +50,8 @@ poniendo la suite roja sin que nadie hubiera tocado código.
 |---|---|
 | `tests/conftest.py` | Dobles: `FakeTransport`, `ScriptedPlayers`, `render_mentions` |
 | `tests/test_werewolf_rules.py` | Reglas deterministas: reparto, cadenas de muerte, victoria |
+| `tests/test_orchestrator.py` | Parseo de comandos, ciclo de vida de una partida, encaminamiento |
+| `tests/test_recruit.py` | Quién se apunta: "yo", "me apunto" y lo que no cuenta |
 | `tests/test_werewolf_flow.py` | Partidas completas del grafo |
 | `tests/test_adversarial.py` | Entradas hostiles: basura, muertos que actúan, inyección |
 | `tests/test_concurrencia.py` | Acciones simultáneas, dos partidas a la vez, pools |

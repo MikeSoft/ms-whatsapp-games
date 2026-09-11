@@ -7,7 +7,10 @@ encuesta de WhatsApp.
 - **Comando**: `#juego kahoot <instrucción>` · alias `trivia`, `preguntas`,
   `quiz`, `concurso`, `cultura general`
 - **No necesita el sufijo `ia`**: sin modelo el juego no es lo que promete, así
-  que lo declara en su ficha y lo recibe siempre
+  que lo declara en su ficha (`needs_llm=True`) y el orquestador le entrega el
+  modelo sin que el máster lo pida. Eso sí, **tiene que haber modelo**: sin
+  `LLM_API_KEY` el cliente general nace apagado y el concurso cae al banco
+  estático. Ver [El modelo del concurso](#el-modelo-del-concurso)
 - **Jugadores**: cualquiera del grupo que toque la encuesta
 
 ---
@@ -148,6 +151,12 @@ Si no hay LLM disponible se tira de un banco estático de cultura general y se
 avisa en el grupo de que el tema pedido no se respetó. Es la regla de la casa:
 nada depende del modelo para funcionar.
 
+Ese aviso —*"⚠️ No pude generar preguntas del tema pedido"*— sale en dos casos
+que conviene no confundir: **no había modelo** (la puerta de `LLM_API_KEY`
+cerrada, y entonces no se llegó a llamar a nadie) o **lo hubo y no dio ni una
+pregunta válida**, que sí deja un `kahoot.generation_short` en el log. Si el
+aviso aparece sin esa línea, el problema es de configuración, no del modelo.
+
 ---
 
 ## Aritmética: el único tema que se verifica
@@ -192,6 +201,13 @@ esperar; una escena narrada a mitad de partida, no.
 | `KAHOOT_LLM_BASE_URL` | Otro proveedor entero. Vacío usa `LLM_BASE_URL` |
 | `KAHOOT_LLM_API_KEY` | Su clave. Vacío usa `LLM_API_KEY` |
 | `KAHOOT_LLM_REASONING_EFFORT` | `none`/`low`/`medium`/`high`, en modelos que razonan |
+
+> **Estas cuatro eligen *qué* modelo, nunca *si* hay modelo.** La puerta
+> maestra es `LLM_API_KEY`: si está vacía, el orquestador entrega un cliente
+> apagado y `Kahoot._llm()` lo devuelve tal cual sin mirar ninguna de estas
+> variables. Decidir gastar API sigue siendo del despliegue, no del juego. Con
+> un `KAHOOT_LLM_API_KEY` puesto y `LLM_API_KEY` vacía, el concurso **no**
+> genera preguntas.
 
 **Acotar el razonamiento importa mucho.** Medido con `gemini-3.8-flash` sobre
 la misma tanda: sin límite tarda 20-25 s y gasta unos 5.000 tokens pensando;

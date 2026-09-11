@@ -69,7 +69,7 @@ class Settings(BaseSettings):
     # Números autorizados a lanzar y administrar partidas. Admite varios,
     # separados por comas o puntos y coma. Se guarda normalizado.
     manager_number: str = ""
-    command_prefix: str = "!"
+    command_prefix: str = "#"
     # Silenciar el grupo (sólo administradores) requiere WAHA Plus.
     manage_group_permissions: bool = True
     # Etiquetar a los contactos en los mensajes del grupo (@número). Deja

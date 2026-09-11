@@ -4,8 +4,8 @@ Los Hombres Lobo de Castronegro, dirigido por el bot. Reparte los roles por
 privado, silencia el grupo de noche, recoge las acciones ocultas, narra el
 amanecer y gestiona la votación del día.
 
-- **Comando**: `#juego hombreslobo` · alias `lobos`, `hombres lobo`,
-  `werewolf`, `castronegro`, `hl`
+- **Comando**: `#juego hombreslobo` · alias `hombres lobo`, `hombre lobo`,
+  `loboso`, `lobos`, `lobo`, `werewolf`, `castronegro`, `hl`
 - **Con narración generada**: `#juego hombreslobo ia`
 - **Jugadores**: 4 a 24
 

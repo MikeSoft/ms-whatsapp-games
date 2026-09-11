@@ -256,7 +256,7 @@ class WerewolfNodes:
             await asyncio.wait_for(gather, timeout=budget)
         except TimeoutError:
             # CancelledError no se captura a propósito: si la cancelación viene
-            # de fuera (`!cancelar`, apagado) tiene que seguir su camino.
+            # de fuera (`#cancelar`, apagado) tiene que seguir su camino.
             log.warning(
                 "werewolf.dm_budget_exceeded",
                 session_id=self.ctx.session_id,

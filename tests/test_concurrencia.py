@@ -468,10 +468,10 @@ async def test_el_orquestador_lleva_dos_grupos_en_paralelo(monkeypatch):
     grupo_a, grupo_b = "120000000000a@g.us", "120000000000b@g.us"
     await asyncio.gather(
         orch.handle(
-            inbound(MANAGER, "!juego hombreslobo", scope=Scope.GROUP, chat_id=grupo_a)
+            inbound(MANAGER, "#juego hombreslobo", scope=Scope.GROUP, chat_id=grupo_a)
         ),
         orch.handle(
-            inbound(MANAGER, "!juego hombreslobo", scope=Scope.GROUP, chat_id=grupo_b)
+            inbound(MANAGER, "#juego hombreslobo", scope=Scope.GROUP, chat_id=grupo_b)
         ),
     )
 
@@ -550,7 +550,7 @@ async def test_el_webhook_encola_mientras_el_grafo_recoge(monkeypatch):
     )
 
     await orch.handle(
-        inbound(MANAGER, "!juego hombreslobo", scope=Scope.GROUP, chat_id=GROUP_ID)
+        inbound(MANAGER, "#juego hombreslobo", scope=Scope.GROUP, chat_id=GROUP_ID)
     )
 
     # 12 personas se apuntan en paralelo, con ruido intercalado.

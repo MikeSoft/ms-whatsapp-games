@@ -1,6 +1,6 @@
 """Lectura de la instrucción que escribe el máster.
 
-``!juego kahoot 15 preguntas de 10 segundos sobre cine de los ochenta``
+``#juego kahoot 15 preguntas de 10 segundos sobre cine de los ochenta``
 
 Los números se sacan con expresiones regulares y lo que sobra es el tema. Se
 hace así a propósito: cuántas preguntas hay, cuánto duran y cuántas opciones

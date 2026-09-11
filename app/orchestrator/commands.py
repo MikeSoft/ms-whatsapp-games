@@ -26,7 +26,7 @@ class Command:
 
     @property
     def argument(self) -> str:
-        """Los argumentos como una sola cadena (``!juego hombres lobo``)."""
+        """Los argumentos como una sola cadena (``#juego hombres lobo``)."""
         return " ".join(self.args).strip()
 
     def has(self, flag: str) -> bool:
@@ -65,11 +65,11 @@ def _strip_accents(value: str) -> str:
     return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
 
 
-def parse_command(text: str, *, prefix: str = "!") -> Command | None:
+def parse_command(text: str, *, prefix: str = "#") -> Command | None:
     """Extrae un comando de un mensaje. ``None`` si no lo es.
 
-    Es tolerante con mayúsculas y acentos: ``!Juego``, ``!catálogo`` y
-    ``!CANCELAR`` funcionan igual.
+    Es tolerante con mayúsculas y acentos: ``#Juego``, ``#catálogo`` y
+    ``#CANCELAR`` funcionan igual.
     """
     raw = (text or "").strip()
     if not raw or not prefix or not raw.startswith(prefix):
@@ -96,7 +96,7 @@ def parse_command(text: str, *, prefix: str = "!") -> Command | None:
     return Command(name=canonical, args=args, raw=raw, flags=frozenset(flags))
 
 
-def help_text(prefix: str = "!") -> str:
+def help_text(prefix: str = "#") -> str:
     return (
         "🎮 *Comandos del máster*\n\n"
         f"`{prefix}juegos` — lista los juegos disponibles\n"

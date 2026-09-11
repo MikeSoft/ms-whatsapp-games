@@ -96,7 +96,7 @@ def _state(players: list[Player], **extra) -> dict:
         "?????",
         "1234567890" * 40,
         "\n\n\n",
-        "!juego hombreslobo",
+        "#juego hombreslobo",
         "SELECT * FROM players; DROP TABLE messages;",
         "{{7*7}} ${jndi:ldap://x}",
         "-1",

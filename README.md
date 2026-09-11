@@ -28,7 +28,8 @@ Edita `.env` y pon como mínimo quién puede dar órdenes:
 
 ```env
 MANAGER_NUMBER=+573001234567     # admite varios, separados por comas
-LLM_API_KEY=sk-...               # opcional: sin clave, narrativa estática
+LLM_API_KEY=sk-...               # sin clave: narrativa estática y el
+                                 # concurso tira de su banco de preguntas
 ```
 
 Levanta el stack —el microservicio, Redis para los buzones efímeros y WAHA como
@@ -114,8 +115,7 @@ Sólo los aceptan los números de `MANAGER_NUMBER`.
 | `#cancelar` | Corta la partida y reabre el grupo |
 | `#ayuda` | Recuerda los comandos |
 
-El prefijo es el que diga `COMMAND_PREFIX`: `.env.example` trae `#`, y si la
-variable falta del todo el código cae en `!`.
+El prefijo es configurable con `COMMAND_PREFIX`; por defecto `#`.
 
 Tolera mayúsculas y acentos: `#Juego`, `#CATÁLOGO` y `#cancelar` funcionan
 igual. Lo que se escriba **detrás del nombre** llega al juego como instrucción,
@@ -157,7 +157,7 @@ juego en su documento. Las transversales:
 | Variable | Por defecto | Para qué |
 |---|---|---|
 | `MANAGER_NUMBER` | *(vacío)* | Números que pueden dar órdenes, separados por comas |
-| `COMMAND_PREFIX` | `#` en `.env.example` | Prefijo de los comandos |
+| `COMMAND_PREFIX` | `#` | Prefijo de los comandos |
 | `WAHA_BASE_URL` | `http://waha:3000` | Dónde vive WAHA |
 | `WAHA_SESSION` | `default` | Qué sesión usar |
 | `WAHA_WEBHOOK_HMAC_SECRET` | *(vacío)* | Firma de los webhooks |

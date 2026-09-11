@@ -215,7 +215,7 @@ class Orchestrator:
             return
 
         # El nombre del juego y lo que el máster le pide detrás comparten
-        # línea: ``!juego kahoot preguntas de cine`` es un juego y una orden.
+        # línea: ``#juego kahoot preguntas de cine`` es un juego y una orden.
         game_cls, instruccion = registry.resolve_prefix(command.args)
         if game_cls is None:
             disponibles = ", ".join(spec.key for spec in registry.specs())

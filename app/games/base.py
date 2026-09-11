@@ -118,9 +118,9 @@ class GameContext:
     store: Any | None = None
     #: Checkpointer de LangGraph, si el juego usa uno.
     checkpointer: Any | None = None
-    #: Argumentos libres del comando (``!juego hombreslobo rapido``).
+    #: Argumentos libres del comando (``#juego hombreslobo rapido``).
     args: list[str] = field(default_factory=list)
-    #: Modificadores reconocidos del comando (``!juego hombreslobo ia``).
+    #: Modificadores reconocidos del comando (``#juego hombreslobo ia``).
     #: El orquestador ya los ha aplicado donde tocaba —``ia`` decide qué
     #: cliente de LLM llega en ``llm``—, pero el juego puede consultarlos.
     flags: frozenset[str] = frozenset()

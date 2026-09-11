@@ -166,9 +166,12 @@ def _clean_topic(text: str) -> str:
         words.pop(0)
     while words and _es_relleno(words[-1]):
         words.pop()
+    # Sacar un patrón de en medio deja el hueco y su puntuación huérfana:
+    # de "sobre cine y que dure 3 segundos, y que..." queda "cine , y que...".
+    limpio = re.sub(r"\s+([,.;:])", r"\1", " ".join(words))
     # Los guiones largos van por punto de código: ruff los marca como
     # ambiguos si se escriben literales.
-    return " ".join(words).strip(" ,.:;-\u2013\u2014").strip()
+    return limpio.strip(" ,.:;-\u2013\u2014").strip()
 
 
 def parse_brief(text: str, settings: Settings) -> Brief:

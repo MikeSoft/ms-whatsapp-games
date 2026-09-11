@@ -414,6 +414,13 @@ def test_la_instruccion_aguanta_como_escribe_la_gente():
          ("ajedrez", 5, 20, 5)),
         ("preguntas de botánica que tarden 15 segundos",
          ("botánica", 10, 15, 5)),
+        # Al sacar la duración de en medio, la coma que la seguía se quedaba
+        # suelta: "cine , y que la respuesta...".
+        (
+            "1 preguntas sobre cine con 2 respuestas y que se demore "
+            "3 segundos, y que la respuesta lleve iconos",
+            ("cine, y que la respuesta lleve iconos", 1, 3, 2),
+        ),
     ]
     for frase, esperado in casos:
         b = parse_brief(frase, s)

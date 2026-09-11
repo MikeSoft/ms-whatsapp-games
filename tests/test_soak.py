@@ -251,11 +251,14 @@ def _comprobar_invariantes(
     grupo = [render_mentions(m, names) for m in transport.group_messages]
     cierre = grupo[-1]
     assert "Todos los roles" in cierre
+    # Sólo el resumen de roles: si la partida terminó en el amanecer, el cierre
+    # trae además las muertes de esa noche, que llevan el mismo separador.
+    resumen = cierre.split("Todos los roles", 1)[1]
     # Se compara por líneas completas: "1. Jugador1" es subcadena de
     # "11. Jugador13", así que contar apariciones daría falsos positivos.
     etiquetas = [
         linea.split(" — ", 1)[0].strip()
-        for linea in cierre.splitlines()
+        for linea in resumen.splitlines()
         if " — " in linea
     ]
     assert len(etiquetas) == len(jugadores)

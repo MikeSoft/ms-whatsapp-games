@@ -140,10 +140,12 @@ class LLMClient:
         if json_mode:
             # Lo aceptan los proveedores que hablan el dialecto de OpenAI.
             overrides["response_format"] = {"type": "json_object"}
-        if reasoning_effort:
-            # Sólo lo entienden los modelos que razonan, y no todos los
-            # proveedores lo aceptan: se manda únicamente si se pide.
-            overrides["reasoning_effort"] = reasoning_effort
+        # Sólo lo entienden los modelos que razonan, y no todos los
+        # proveedores lo aceptan: se manda únicamente si hay valor. Quien
+        # llama puede pedir uno distinto del general para su caso.
+        effort = reasoning_effort or (self._settings.llm_reasoning_effort or '').strip()
+        if effort:
+            overrides["reasoning_effort"] = effort
         if overrides:
             try:
                 model = model.bind(**overrides)

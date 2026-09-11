@@ -114,6 +114,13 @@ class Settings(BaseSettings):
     llm_max_tokens: int = Field(default=700, ge=64)
     llm_timeout_seconds: float = Field(default=30.0, gt=0)
     llm_max_retries: int = Field(default=2, ge=0)
+    # Cuánto se le deja pensar antes de escribir, en los modelos que razonan.
+    # No es un ajuste de calidad sino de integridad: el presupuesto de
+    # LLM_MAX_TOKENS lo comparten pensamiento y respuesta, así que un modelo
+    # que piensa sin límite agota el cupo y la escena sale cortada a media
+    # palabra. Vacío no manda el parámetro, que no todos los proveedores
+    # aceptan.
+    llm_reasoning_effort: str = "low"
 
     # --------------------------------------------------------------- timers
     recruit_seconds: int = Field(default=30, ge=1)

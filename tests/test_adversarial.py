@@ -464,13 +464,17 @@ async def test_la_narrativa_del_amanecer_no_nombra_el_rol_del_salvador():
     transport = FakeTransport()
     ctx = make_context(transport=transport, inbox=MemoryInbox())
     ctx.llm = LLMEspia()
-    nodes = WerewolfNodes(ctx, timers=Timers(filler_interval=0.0), rng=random.Random(1))
+    nodes = WerewolfNodes(
+        ctx, timers=Timers(debate=0.01, filler_interval=0.0), rng=random.Random(1)
+    )
 
     players = [_player(1, Role.LOBO), _player(2, Role.BRUJA), _player(3, Role.ALDEANO)]
-    await nodes.amanecer(
+    # El amanecer se cuenta al abrir el juicio, en el mismo mensaje.
+    await nodes.debate(
         _state(
             players,
             deaths_last_night=[],
+            dawn_pending=True,
             night_actions={"saved": True, "wolf_target": players[2]["jid"]},
         )
     )
@@ -478,7 +482,9 @@ async def test_la_narrativa_del_amanecer_no_nombra_el_rol_del_salvador():
     todo = "\n".join(capturados)
     assert "intervencion_misteriosa" in todo or "misteriosa" in todo
     assert "bruja" not in todo.lower()
-    assert "Jugador2" not in todo, "no se dice quién salvó"
+    # El nombre de quien curó sólo puede salir como un vivo más de la lista de
+    # la plaza, nunca ligado a la intervención.
+    assert todo.count("Jugador2") == 1, "no se dice quién salvó"
 
 
 # =====================================================================
@@ -623,8 +629,48 @@ def test_un_jugador_sin_nombre_publico_recibe_una_etiqueta_usable():
         ('"Entre comillas."', "Entre comillas."),
         ("*Énfasis* válido.", "*Énfasis* válido."),
         ("Texto normal.", "Texto normal."),
+        # Numeración de palabras del propio modelo, dentro de la frase.
+        ("El sol (37) humea (38) bajo el cielo.", "El sol humea bajo el cielo."),
+        # Arranca a media frase: se publica desde la primera frase entera.
+        (
+            ") humea bajo el pálido sol. La aldea despierta helada.",
+            "La aldea despierta helada.",
+        ),
+        # Repaso del modelo colado como una línea más.
+        (
+            "La niebla cubre la plaza.\n*   Survivors count? Matches 6.",
+            "La niebla cubre la plaza.",
+        ),
+        # Cortado por cupo a media palabra: se retrocede a la última frase.
+        (
+            "La claridad se cuela entre las ramas desnudas. Cinco figuras temblor",
+            "La claridad se cuela entre las ramas desnudas.",
+        ),
     ],
 )
 def test_el_narrador_limpia_el_markdown_que_whatsapp_no_entiende(crudo, esperado):
     """WhatsApp usa `*negrita*`; un `**doble**` se vería literal en el grupo."""
     assert _tidy(crudo) == esperado
+
+
+@pytest.mark.parametrize(
+    "crudo",
+    [
+        # Todo lo que llegó es el repaso del modelo, en inglés.
+        ") without naming roles.\n*   Survivors count? Matches 6.",
+        # Un muñón: lo que queda tras recortar no da ni para una frase.
+        "Ana. figuras temblor",
+        # Sin puntuación y demasiado largo para ser una frase suelta.
+        "la plaza se llena de gente que grita y señala sin parar mientras el "
+        "viento arrastra la niebla entre las casas y nadie se atreve a mirar",
+        "",
+    ],
+)
+def test_lo_que_el_modelo_deja_a_medias_no_se_publica(crudo):
+    """Descartar y caer al texto estático es mejor que publicar media escena.
+
+    Un modelo que razona en el mismo campo de texto cuela su andamiaje y se
+    queda sin cupo a media palabra. Eso salió al grupo una vez; el contrato
+    ahora es que ``_tidy`` devuelva ``None`` y quien llama reintente.
+    """
+    assert _tidy(crudo) is None

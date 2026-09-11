@@ -533,7 +533,7 @@ async def test_si_el_narrador_falla_el_juicio_sigue_corriendo(monkeypatch):
 
 
 async def test_al_narrador_del_juicio_no_se_le_pasa_nada_secreto(table, monkeypatch):
-    """Los HECHOS del debate llevan exactamente tres cosas, y ningún rol.
+    """Los HECHOS del debate llevan lo público del juicio, y ningún rol.
 
     Es la protección que importa ahora que el prompt incluye texto que
     escriben los jugadores: por mucho que alguien intente dirigir al modelo
@@ -557,13 +557,71 @@ async def test_al_narrador_del_juicio_no_se_le_pasa_nada_secreto(table, monkeypa
     ]
     assert hechos_vistos, "no se narró ningún tramo del juicio"
     for hechos in hechos_vistos:
-        assert set(hechos) == {"ronda", "segundos_restantes", "se_dijo"}
+        assert set(hechos) == {"ronda", "segundos_restantes", "se_dijo", "vivos"}
         for linea in hechos["se_dijo"]:
             assert set(linea) == {"quien", "dijo"}
+        # Los vivos son nombres, que es lo que el grupo ya tiene delante en la
+        # lista de sospechosos. Ni rol, ni JID, ni nada que no se vea.
+        for nombre in hechos["vivos"]:
+            assert isinstance(nombre, str) and "@" not in nombre
     # El intento de dirigir al modelo viaja como lo que es: una cita.
     assert any(
         any(linea["dijo"] == ataque for linea in h["se_dijo"]) for h in hechos_vistos
     )
+
+
+async def test_el_amanecer_y_el_juicio_van_en_un_solo_mensaje(table):
+    """Un mensaje por día: una historia, una lista y una etiqueta por persona.
+
+    Antes salían dos mensajes seguidos —el amanecer y la apertura del juicio—
+    con la misma gente etiquetada en los dos y dos narraciones que no se
+    conocían entre sí.
+    """
+    _result, transport, _script, _ = await _play(table, 6)
+    grupo = transport.group_messages
+
+    amaneceres = [m for m in grupo if "AMANECE EL DÍA" in m]
+    juicios = [m for m in grupo if "EL JUICIO" in m]
+    assert amaneceres, "no se narró ningún amanecer"
+    assert len(juicios) == len(amaneceres), "el juicio salió por su cuenta"
+    for mensaje in amaneceres:
+        assert "EL JUICIO" in mensaje
+        # Una sola lista de gente: las líneas numeradas no se repiten.
+        listadas = [
+            linea for linea in mensaje.splitlines() if re.match(r"^\d+\. ", linea)
+        ]
+        assert listadas, "el mensaje del día no lista a nadie"
+        assert len(listadas) == len(set(listadas)), "la lista sale dos veces"
+
+
+async def test_si_la_partida_acaba_al_amanecer_las_muertes_se_cuentan_igual():
+    """El juicio no llega a abrirse, así que la deuda la paga el cierre."""
+    transport = FakeTransport()
+    ctx = make_context(transport=transport, inbox=MemoryInbox(), session_id="s-fin")
+    nodes = WerewolfNodes(ctx, timers=fast_timers())
+
+    caida = {
+        "jid": "573001@c.us", "name": "Ana", "number": 1, "alive": False,
+        "role": str(Role.ALDEANO), "death_round": 1, "death_cause": "lobos",
+    }
+    lobo = {
+        "jid": "573002@c.us", "name": "Beto", "number": 2, "alive": True,
+        "role": str(Role.LOBO),
+    }
+    estado = dict(initial_state("s-fin", GROUP_ID))
+    estado.update(
+        players=[caida, lobo],
+        round_no=2,
+        winner="lobos",
+        deaths_last_night=[caida["jid"]],
+        dawn_pending=True,
+    )
+
+    await nodes.final(estado)
+
+    cierre = transport.group_text()
+    assert "☠️" in cierre, "la muerte de la última noche no se contó"
+    assert "Todos los roles" in cierre
 
 
 async def test_el_juicio_no_hereda_lo_que_se_dijo_antes_de_abrirlo():

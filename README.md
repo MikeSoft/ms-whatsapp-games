@@ -164,6 +164,7 @@ juego en su documento. Las transversales:
 | `WAHA_DRY_RUN` | `false` | Escribe los envíos en el log en vez de mandarlos |
 | `USE_MENTIONS` | `true` | Etiquetar contactos en vez de sólo nombrarlos |
 | `LLM_PROVIDER` | `gemini` | `gemini`, `deepseek`, `openai` o `none` |
+| `LLM_REASONING_EFFORT` | `low` | Cuánto piensa antes de escribir; vacío no lo manda |
 | `MESSAGE_RETENTION_DAYS` | `30` | Purga del histórico al arrancar |
 
 ### Redis y SQLite: para qué cada uno

@@ -114,8 +114,14 @@ DEBATE_SLICE_SECONDS = 8.0
 
 #: Intervenciones nuevas que justifican comentar antes de que toque por reloj.
 #: Un juicio encendido da para varios comentarios; uno apagado se queda con la
-#: cadencia del reloj y no molesta.
-DEBATE_LINES_PER_COMMENT = 4
+#: cadencia del reloj y no molesta. Bajo a propósito: el comentario que recoge
+#: acusaciones reales es lo que hace que el juicio se sienta arbitrado, y
+#: llegar tarde a una acusación es llegar cuando ya se habla de otra cosa.
+DEBATE_LINES_PER_COMMENT = 2
+
+#: Suelo entre comentarios, como fracción del intervalo de relleno. Existe para
+#: que un grupo muy hablador no acabe leyendo más bot que vecinos.
+DEBATE_GAP_RATIO = 0.4
 
 
 @dataclass(frozen=True)
@@ -1065,83 +1071,79 @@ class WerewolfNodes:
 
     # ================================================== fase 3b: el amanecer
     async def amanecer(self, state: WerewolfState) -> dict[str, Any]:
-        """Publica el resultado de la noche y reabre el grupo."""
+        """Cierra la noche y reabre el grupo, sin publicar todavía.
+
+        Lo que la aldea encuentra al despertar y lo que hace a continuación son
+        la misma escena, así que salen en un solo mensaje desde :meth:`debate`.
+        Separarlos obligaba a etiquetar a todo el mundo dos veces y a contar la
+        historia dos veces, con dos llamadas al modelo que no se conocían entre
+        sí. Si la partida termina en este amanecer, es el cierre el que publica
+        las muertes: ``dawn_pending`` dice que están sin contar.
+        """
         players = list(state["players"])
         round_no = state["round_no"]
         deaths = list(state.get("deaths_last_night") or [])
-        saved = bool((state.get("night_actions") or {}).get("saved"))
+        victims = [v for v in (by_jid(players, jid) for jid in deaths) if v is not None]
 
-        victims = [by_jid(players, jid) for jid in deaths]
-        victims = [v for v in victims if v is not None]
-        texto = self._texto()
-
-        if victims:
-            hechos = {
-                "ronda": round_no,
-                "victimas": [
-                    {"nombre": v["name"], "causa": v.get("death_cause")} for v in victims
-                ],
-                "supervivientes": len(alive(players)),
-            }
-            flavour = await self.narrator.flavour(
-                "amanecer_muertes",
-                hechos,
-                fallback=prompts.FALLBACK_DAWN_DEATHS,
-                max_words=90,
-            )
-            lineas = []
-            for victim in victims:
-                causa = _cause_text(victim.get("death_cause"))
-                etiqueta = tag(victim, texto)
-                if self.settings.werewolf_reveal_role_on_death:
-                    lineas.append(f"☠️ {etiqueta} {causa} — era {role_title(victim)}")
-                else:
-                    lineas.append(f"☠️ {etiqueta} {causa}")
-            lineas.append("")
-            lineas.append("Quien haya caído ya no participa: ignorad lo que escriba.")
-            cuerpo = "\n".join(lineas)
-        else:
-            hechos = {
-                "ronda": round_no,
-                "victimas": [],
-                "intervencion_misteriosa": saved,
-                "supervivientes": len(alive(players)),
-            }
-            flavour = await self.narrator.flavour(
-                "amanecer_sin_muertes",
-                hechos,
-                fallback=(
-                    prompts.FALLBACK_DAWN_QUIET
-                    if saved
-                    else "🌅 Amanece sin sangre. Los lobos no se pusieron de acuerdo "
-                    "y la aldea despierta entera, aunque nadie sabe por qué."
-                ),
-                max_words=80,
-            )
-            cuerpo = "🕊️ Esta noche no murió nadie."
-
-        vivos = alive(players)
-        flavour = self._etiqueta_nombres(flavour, players, texto)
         await self.ctx.transport.set_group_locked(False)
-        await self._group(
-            f"🌅 *AMANECE EL DÍA {round_no}*\n\n{flavour}\n\n{cuerpo}\n\n"
-            f"Siguen vivos ({len(vivos)}):\n{tagged_roster(players, texto)}\n\n"
-            "🔊 El chat está abierto.",
-            texto=texto,
-        )
-
         await self.ctx.record(
             "amanecer",
             round_no=round_no,
             phase="amanecer",
-            detail={"muertes": [v["name"] for v in victims], "vivos": len(vivos)},
+            detail={
+                "muertes": [v["name"] for v in victims],
+                "vivos": len(alive(players)),
+            },
         )
         return {
             "phase": "debate",
             "resume_to": "debate",
             "deaths_last_night": deaths,
+            "dawn_pending": True,
             **self._flush_narrative(),
         }
+
+    def _dawn_block(
+        self, state: WerewolfState, players: list[Player], texto: GroupText
+    ) -> tuple[str, dict[str, Any]]:
+        """Las muertes de la noche, en mecánica y en HECHOS.
+
+        Devuelve las dos formas juntas porque salen de lo mismo y se usan en el
+        mismo sitio: el bloque va al mensaje y los hechos, a la narración que
+        lo acompaña. Las etiquetas se acumulan en ``texto``, así que hay que
+        llamarlo con el compositor del mensaje que va a llevarlas.
+        """
+        deaths = list(state.get("deaths_last_night") or [])
+        victims = [v for v in (by_jid(players, jid) for jid in deaths) if v is not None]
+        vivos = len(alive(players))
+
+        if not victims:
+            saved = bool((state.get("night_actions") or {}).get("saved"))
+            hechos = {
+                "victimas": [],
+                "intervencion_misteriosa": saved,
+                "supervivientes": vivos,
+            }
+            return "🕊️ Esta noche no murió nadie.", hechos
+
+        lineas = [self._death_line(victim, texto) for victim in victims]
+        lineas.append("")
+        lineas.append("Quien haya caído ya no participa: ignorad lo que escriba.")
+        hechos = {
+            "victimas": [
+                {"nombre": v["name"], "causa": v.get("death_cause")} for v in victims
+            ],
+            "supervivientes": vivos,
+        }
+        return "\n".join(lineas), hechos
+
+    def _death_line(self, victim: Player, texto: GroupText) -> str:
+        """Una muerte, contada con algo más que un parte médico."""
+        causa = _cause_text(victim.get("death_cause"), self.rng)
+        etiqueta = tag(victim, texto)
+        if self.settings.werewolf_reveal_role_on_death:
+            return f"☠️ {etiqueta} {causa} — era {role_title(victim)}"
+        return f"☠️ {etiqueta} {causa}"
 
     # ============================================ evaluación de la victoria
     async def evaluar(self, state: WerewolfState) -> dict[str, Any]:
@@ -1204,21 +1206,34 @@ class WerewolfNodes:
 
     # ==================================================== fase 4: el juicio
     async def debate(self, state: WerewolfState) -> dict[str, Any]:
-        """Abre el debate público y espera."""
+        """Cuenta el amanecer, abre el juicio y escucha: todo en un mensaje.
+
+        El amanecer y el juicio son la misma escena y se narran de una sola
+        vez, con una sola lista de sospechosos. Así el pueblo se lee la
+        historia entera seguida y a nadie se le etiqueta dos veces por lo
+        mismo.
+        """
         players = list(state["players"])
         round_no = state["round_no"]
+        texto = self._texto()
+
+        amanecio = bool(state.get("dawn_pending"))
+        cuerpo, hechos_noche = (
+            self._dawn_block(state, players, texto) if amanecio else ("", {})
+        )
 
         flavour = await self.narrator.flavour(
-            "juicio",
+            "amanecer_y_juicio" if amanecio else "juicio",
             {
                 "ronda": round_no,
                 "vivos": [p["name"] for p in alive(players)],
+                **hechos_noche,
                 # Lo de la ronda pasada: el juicio nuevo sabe de qué se venía
                 # hablando en lugar de empezar de cero cada día.
                 **self._voces(state),
             },
-            fallback=prompts.FALLBACK_TRIAL,
-            max_words=70,
+            fallback=_fallback_dia(hechos_noche) if amanecio else prompts.FALLBACK_TRIAL,
+            max_words=110 if amanecio else 70,
         )
         # El juicio empieza con este anuncio, no antes. El buzón del grupo
         # arrastra todo lo dicho desde la votación anterior —el veredicto, la
@@ -1228,19 +1243,30 @@ class WerewolfNodes:
         # acusaciones que nadie hizo aquí.
         await self.ctx.inbox.clear(state["session_id"], keys=["group"])
 
-        texto = self._texto()
         flavour = self._etiqueta_nombres(flavour, players, texto)
-        await self._group(
-            f"⚖️ *EL JUICIO — día {round_no}*\n\n{flavour}\n\n"
+        vivos = alive(players)
+        partes: list[str] = []
+        if amanecio:
+            partes.append(f"🌅 *AMANECE EL DÍA {round_no}*\n\n{flavour}\n\n{cuerpo}")
+        else:
+            partes.append(flavour)
+        partes.append(
+            f"⚖️ *EL JUICIO — día {round_no}*\n\n"
             f"Tenéis {_seconds(self.timers.debate)} para acusaros. "
             "Al terminar abriré la votación.\n\n"
-            f"Sospechosos:\n{tagged_roster(players, texto)}",
-            texto=texto,
+            f"Sospechosos ({len(vivos)}):\n{tagged_roster(players, texto)}\n\n"
+            "🔊 El chat está abierto."
         )
+        await self._group("\n\n".join(partes), texto=texto)
 
         oido = await self._listen_to_debate(state["session_id"], round_no, players)
 
-        return {"phase": "votacion", "debate_log": oido, **self._flush_narrative()}
+        return {
+            "phase": "votacion",
+            "debate_log": oido,
+            "dawn_pending": False,
+            **self._flush_narrative(),
+        }
 
     def _debate_lines(
         self, messages: list[InboundMessage], players: list[Player]
@@ -1289,7 +1315,7 @@ class WerewolfNodes:
         # no publicar encima de la encuesta; suelo entre comentarios.
         tramo_max = min(interval, DEBATE_SLICE_SECONDS) if interval > 0 else 0.0
         margen = tramo_max * 0.5
-        hueco = interval * 0.5
+        hueco = interval * DEBATE_GAP_RATIO
 
         lineas: list[dict[str, str]] = []
         dichas = 0
@@ -1334,8 +1360,14 @@ class WerewolfNodes:
                         round_no=round_no,
                         deadline=deadline,
                         index=index,
-                        max_words=45,
-                        extra={"se_dijo": list(lineas)},
+                        max_words=60,
+                        # Cuanto más sepa, más cosas tiene que decir: quién
+                        # sigue en pie y qué se acaba de gritar, no sólo el
+                        # reloj.
+                        extra={
+                            "se_dijo": list(lineas),
+                            "vivos": [p["name"] for p in alive(players)],
+                        },
                         players=players,
                     )
                 )
@@ -1553,6 +1585,16 @@ class WerewolfNodes:
         }
         fallback, titular = textos.get(winner or "nadie", textos["nadie"])
 
+        texto = self._texto()
+        # Si la partida se acabó en el amanecer, el juicio no llegó a
+        # celebrarse y las muertes de anoche siguen sin contarse: van aquí,
+        # antes del desenlace, o no se cuentan nunca.
+        cuerpo, hechos_noche = (
+            self._dawn_block(state, players, texto)
+            if state.get("dawn_pending")
+            else ("", {})
+        )
+
         supervivientes = [p["name"] for p in alive(players)]
         flavour = await self.narrator.flavour(
             f"victoria_{winner or 'nadie'}",
@@ -1560,29 +1602,87 @@ class WerewolfNodes:
                 "ganador": winner,
                 "supervivientes": supervivientes,
                 "rondas": state["round_no"],
+                **hechos_noche,
                 **self._voces(state),
             },
             fallback=fallback,
             max_words=100,
         )
 
-        texto = self._texto()
         flavour = self._etiqueta_nombres(flavour, players, texto)
-        await self._group(
-            f"{titular}\n\n{flavour}\n\n"
-            f"🎭 *Todos los roles:*\n{public_summary(players, texto)}\n\n"
-            f"Rondas jugadas: {max(1, state['round_no'] - 1)}.\n"
+        partes = [titular, "", flavour]
+        if cuerpo:
+            partes += ["", cuerpo]
+        partes += [
+            "",
+            f"🎭 *Todos los roles:*\n{public_summary(players, texto)}",
+            "",
+            f"Rondas jugadas: {max(1, state['round_no'] - 1)}.",
             "Gracias por jugar. 🐺",
-            texto=texto,
+        ]
+        await self._group("\n".join(partes), texto=texto)
+        return {
+            "phase": "fin",
+            "finished": True,
+            "dawn_pending": False,
+            **self._flush_narrative(),
+        }
+
+
+#: Cómo se cuenta cada muerte. Varias formas por causa: el parte de bajas se
+#: repite cada ronda y con una sola frase por causa la partida acaba sonando a
+#: formulario. El hecho es el mismo —quién murió y de qué— y lo decide el
+#: código; lo que cambia es cómo se dice.
+_CAUSE_TEXTS: dict[str, tuple[str, ...]] = {
+    "lobos": (
+        "fue devorado por los lobos",
+        "amaneció con la puerta arrancada y el zarpazo todavía fresco",
+        "no llegó al amanecer: los lobos se lo llevaron monte adentro",
+    ),
+    "veneno": (
+        "apareció envenenado",
+        "se quedó frío en su cama, sin una sola herida encima",
+        "amaneció con un frasco vacío entre los dedos",
+    ),
+    "amor": (
+        "murió de tristeza al perder a su amor",
+        "no quiso quedarse cuando se llevaron a su amor",
+        "siguió a su amor antes de que cantara el gallo",
+    ),
+    "cazador": (
+        "cayó por el último disparo del cazador",
+        "se llevó el último disparo del cazador",
+        "cayó con el eco de ese disparo todavía en la plaza",
+    ),
+    "linchamiento": (
+        "fue linchado por la aldea",
+        "acabó con la soga de la aldea al cuello",
+        "no alcanzó a terminar su defensa: la cuerda ya estaba lista",
+    ),
+}
+
+
+def _cause_text(cause: str | None, rng: random.Random | None = None) -> str:
+    """Cómo murió alguien. Con ``rng`` se elige entre las formas de esa causa.
+
+    Sin ``rng`` devuelve siempre la primera, que es la seca: los tests que
+    comprueban la mecánica no tienen por qué depender del azar.
+    """
+    formas = _CAUSE_TEXTS.get(cause or "")
+    if not formas:
+        return "murió"
+    return rng.choice(formas) if rng is not None else formas[0]
+
+
+def _fallback_dia(hechos_noche: dict[str, Any]) -> str:
+    """Respaldo del mensaje que junta amanecer y juicio, sin modelo detrás."""
+    if hechos_noche.get("victimas"):
+        amanecer = prompts.FALLBACK_DAWN_DEATHS
+    elif hechos_noche.get("intervencion_misteriosa"):
+        amanecer = prompts.FALLBACK_DAWN_QUIET
+    else:
+        amanecer = (
+            "🌅 Amanece sin sangre. Los lobos no se pusieron de acuerdo y la "
+            "aldea despierta entera, aunque nadie sabe por qué."
         )
-        return {"phase": "fin", "finished": True, **self._flush_narrative()}
-
-
-def _cause_text(cause: str | None) -> str:
-    return {
-        "lobos": "fue devorado por los lobos",
-        "veneno": "apareció envenenado",
-        "amor": "murió de tristeza al perder a su amor",
-        "cazador": "cayó por el último disparo del cazador",
-        "linchamiento": "fue linchado por la aldea",
-    }.get(cause or "", "murió")
+    return f"{amanecer} {prompts.FALLBACK_TRIAL}"

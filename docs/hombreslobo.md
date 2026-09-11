@@ -99,15 +99,22 @@ rompe cuando `evaluar` encuentra una condición de victoria.
 | `noche_inicio` | Narra la noche y recoge lobos, vidente y Cupido en paralelo |
 | `noche_bruja` | Le dice a quién atacaron y recoge su decisión |
 | `resolucion` | Cruza ataque, curación y veneno; resuelve cadenas de muerte |
-| `amanecer` | Publica las víctimas y reabre el grupo |
+| `amanecer` | Resuelve la noche y reabre el grupo; no publica todavía |
 | `evaluar` | Comprueba la victoria y enruta |
-| `debate` | Abre el juicio, escucha lo que se dice y lo comenta |
+| `debate` | Cuenta el amanecer, abre el juicio, escucha y lo comenta |
 | `votacion` | Publica la encuesta y recoge los votos |
 | `veredicto` | Lincha al más votado y revela su rol |
 | `final` | Narra el desenlace y revela todos los roles |
 
 La bruja tiene su propio nodo porque **necesita saber a quién atacaron los
 lobos**: su ventana se abre después de la de ellos, no en paralelo.
+
+El amanecer no publica nada: lo que la aldea encuentra al despertar y lo que
+hace a continuación son la misma escena y salen en **un solo mensaje**, el
+que abre el juicio. Así se narra una vez, se etiqueta a cada persona una vez
+y se lista a los vivos una vez. Entre los dos nodos la deuda queda marcada en
+`dawn_pending`, y si la partida termina en ese amanecer la paga `final`, que
+publica las muertes antes del desenlace.
 
 ---
 
@@ -142,6 +149,28 @@ Tres cautelas, porque el narrador pasa a leer lo que escribe la gente:
 - **Acotado por presupuesto de caracteres.** Un debate normal entra completo;
   el tope está para que una avalancha en un grupo grande no dispare coste y
   latencia justo cuando la partida tiene que responder rápido.
+
+El comentario entra por actividad y no sólo por reloj: con un par de
+intervenciones nuevas ya se comenta, con un suelo entre comentarios para que
+un grupo muy hablador no acabe leyendo más bot que vecinos.
+
+### Lo que el modelo deja a medias no se publica
+
+Un modelo que razona escribe a veces en el mismo campo que la respuesta: su
+repaso en inglés, la numeración de las palabras que lleva escritas, o se
+queda sin cupo de tokens a media palabra porque pensar gasta del mismo
+presupuesto. Eso llegó a salir al grupo.
+
+Ahora hay tres defensas, de fuera adentro:
+
+- `LLM_REASONING_EFFORT` acota lo que el modelo piensa antes de escribir, que
+  es lo que dejaba la escena sin cupo.
+- Cada escena pide un cupo de salida holgado, proporcional a su límite de
+  palabras.
+- `app/games/werewolf/narrator.py` descarta lo impublicable —andamiaje,
+  arranques a media frase, finales cortados— y devuelve `None`. El narrador
+  reintenta una vez y, si tampoco, publica el texto estático. Una escena de
+  respaldo se lee bien; media escena, no.
 
 Al modelo se le dice explícitamente que eso son **rumores**: puede recoger el
 tono y quién señala a quién, nunca confirmarlo. El prompt además le prohíbe

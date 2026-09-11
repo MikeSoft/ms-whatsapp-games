@@ -12,6 +12,7 @@ from app.games.kahoot.game import KahootGame
 from app.games.kahoot.questions import (
     Question,
     fallback_questions,
+    generate,
     output_budget,
     parse_questions,
     shuffle_options,
@@ -394,7 +395,7 @@ def test_la_instruccion_aguanta_como_escribe_la_gente():
         ("haz 8 preguntas de cultura general que duren 15 segundos",
          ("cultura general", 8, 15, 5)),
         ("quiero preguntas difíciles de anime, 12 preguntas, 6 segundos",
-         ("difíciles de anime", 12, 6, 5)),
+         ("anime", 12, 6, 5)),
         ("10 preguntas sobre sexo con 5 respuestas por pregunta",
          ("sexo", 10, 10, 5)),
         ("hazme preguntas de historia del rock cada una de 12 segundos",
@@ -599,3 +600,104 @@ def test_el_modelo_propio_no_enciende_un_llm_que_venia_apagado():
     assert juego.ctx.llm.available is False
     assert juego._llm() is juego.ctx.llm
     assert juego._llm().available is False
+
+
+# =====================================================================
+# Segunda pasada de endurecido
+# =====================================================================
+def _floja(i: int) -> dict:
+    """Una pregunta válida y distinta de las demás.
+
+    Cada una con su propia respuesta: el filtro de repetidas descarta dos
+    preguntas que se contesten igual, así que reutilizar la misma opción
+    correcta dejaría la tanda en una sola pregunta.
+    """
+    temas = ("capital de Francia", "río más largo de Egipto", "moneda de Japón")
+    return {
+        "pregunta": f"¿Cuál es la {temas[i % len(temas)]}?",
+        "opciones": [f"correcta{i}", f"falsa{i}a", f"falsa{i}b"],
+        "correcta": 0,
+    }
+
+async def test_el_endurecido_sustituye_la_tanda_por_la_revisada(monkeypatch):
+    """Pedir dificultad de entrada no basta; revisar lo ya escrito sí ayuda."""
+    flojas = {"preguntas": [_floja(i) for i in range(3)]}
+    enunciados = (
+        "¿Cuántos episodios tuvo la primera temporada?",
+        "¿En qué año se estrenó el especial de Halloween?",
+        "¿Quién dirigió el capítulo del monorraíl?",
+    )
+    duras = {
+        "preguntas": [
+            {"pregunta": e, "opciones": [f"A{i}", f"B{i}", f"C{i}"], "correcta": 0}
+            for i, e in enumerate(enunciados)
+        ]
+    }
+    llamadas: list[str] = []
+
+    async def responde(self, system, user, **kwargs):
+        llamadas.append(system)
+        return duras if "Revisas un cuestionario" in system else flojas
+
+    monkeypatch.setattr(LLMClient, "complete_json", responde)
+
+    b = parse_brief("3 preguntas con 3 opciones", make_settings())
+    preguntas, ok = await generate(
+        LLMClient(_con_modelo()), b, rng=random.Random(1)
+    )
+
+    assert ok is True
+    assert len(llamadas) == 2, "tenían que ser dos pasadas"
+    assert {q.text for q in preguntas} == set(enunciados)
+
+
+async def test_si_la_revision_no_sirve_se_queda_la_tanda_original(monkeypatch):
+    """Endurecer no puede costar quedarse sin preguntas."""
+    flojas = {"preguntas": [_floja(i) for i in range(3)]}
+
+    async def responde(self, system, user, **kwargs):
+        # La revisión devuelve basura.
+        return {"preguntas": [{"pregunta": "", "opciones": []}]} \
+            if "Revisas un cuestionario" in system else flojas
+
+    monkeypatch.setattr(LLMClient, "complete_json", responde)
+
+    b = parse_brief("3 preguntas con 3 opciones", make_settings())
+    preguntas, ok = await generate(LLMClient(_con_modelo()), b, rng=random.Random(1))
+
+    assert ok is True
+    assert len(preguntas) == 3
+    assert all("Cuál es la" in q.text for q in preguntas)
+
+
+async def test_con_el_endurecido_apagado_solo_hay_una_pasada(monkeypatch):
+    llamadas: list[str] = []
+
+    async def responde(self, system, user, **kwargs):
+        llamadas.append(system)
+        return {"preguntas": [_floja(i) for i in range(3)]}
+
+    monkeypatch.setattr(LLMClient, "complete_json", responde)
+
+    b = parse_brief("3 preguntas con 3 opciones", make_settings(kahoot_harden=False))
+    await generate(LLMClient(_con_modelo()), b, rng=random.Random(1))
+
+    assert len(llamadas) == 1
+
+
+def test_se_descarta_la_pregunta_que_lleva_la_respuesta_dentro():
+    """Salió de verdad: el enunciado nombraba a Moe y la solución era Moe."""
+    cruda = {
+        "pregunta": "¿Cómo se llama el dueño de la taberna donde trabaja Moe Szyslak?",
+        "opciones": ["Moe Szyslak", "Barney Gumble", "Lenny Leonard"],
+        "correcta": 0,
+    }
+    assert parse_questions({"preguntas": [cruda]}, options=3) == []
+
+    # Una coincidencia parcial de palabras no la tumba.
+    valida = {
+        "pregunta": "¿Qué idioma se habla en Francia?",
+        "opciones": ["Francés", "Alemán", "Italiano"],
+        "correcta": 0,
+    }
+    assert len(parse_questions({"preguntas": [valida]}, options=3)) == 1

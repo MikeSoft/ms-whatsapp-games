@@ -158,6 +158,11 @@ class Settings(BaseSettings):
     # y escribir un cuestionario entero antes de empezar admite esperar más
     # a cambio de mejores preguntas.
     kahoot_llm_model: str = ""
+    # Segunda pasada: el modelo revisa su propia tanda y cambia las preguntas
+    # que se pueden acertar sin conocer el tema. Cuesta otra llamada —unos
+    # cinco segundos— y es lo único que de verdad sube la dificultad: pedirlo
+    # en el prompt de entrada no basta.
+    kahoot_harden: bool = True
 
     @field_validator("manager_number", mode="after")
     @classmethod

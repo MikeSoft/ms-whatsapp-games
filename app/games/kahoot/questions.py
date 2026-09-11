@@ -56,31 +56,47 @@ EXACTITUD
    criterio, dilo en la pregunta: "por superficie", "según la ONU", "en su
    estreno".
 
+DIFICULTAD
+10. Juegan adultos en un grupo de amigos y compiten entre ellos. Calibra para
+    que la pregunta media la acierte una de cada tres personas que conozcan
+    el tema, no todas.
+11. Aplica esta prueba a cada pregunta antes de darla: ¿se puede acertar sin
+    haber visto, leído o estudiado el tema, sólo por haber oído hablar de él?
+    Si la respuesta es sí, cámbiala. Lo que el tema tiene de más conocido no
+    da preguntas: da respuestas que todos saben.
+12. Pregunta por lo que sabe quien lo ha seguido de cerca: personajes
+    secundarios, episodios o capítulos concretos, cifras, fechas, frases
+    textuales, detalles de la trama, quién hizo qué y cuándo.
+13. El enunciado no puede contener la respuesta ni parte de ella. Si nombras a
+    alguien en la pregunta, ese alguien no puede ser la solución.
+14. Reparte la dificultad dentro de la tanda: alguna asequible para que nadie
+    se quede a cero, la mayoría exigentes, y una o dos de verdad difíciles.
+
 DIFICULTAD: LAS OPCIONES FALSAS
-10. Cada falsa es del mismo tipo y del mismo orden de magnitud que la
+15. Cada falsa es del mismo tipo y del mismo orden de magnitud que la
     correcta, y además reconocible: tiene que ser una candidata que alguien
     llegue a considerar de verdad. Si preguntas la capital de Italia, las
     otras opciones son ciudades italianas conocidas —Milán, Nápoles,
     Florencia—, nunca ciudades de otro país ni pueblos que nadie sabría
     ubicar. Si la respuesta es un año, todas son años del mismo periodo; si
     es una persona, todas son personas reales del mismo campo y época.
-11. Usa como falsas los errores que comete de verdad quien sabe algo del tema:
+16. Usa como falsas los errores que comete de verdad quien sabe algo del tema:
     la confusión clásica, el que se le parece, el inmediatamente anterior o
     posterior. Nada de rellenar con disparates ni con cosas de otro dominio.
-12. Las falsas son cosas reales y existentes, nunca inventadas.
-13. Todas las opciones con el mismo formato: longitud parecida, mismo registro
+17. Las falsas son cosas reales y existentes, nunca inventadas.
+18. Todas las opciones con el mismo formato: longitud parecida, mismo registro
     y misma precisión. La correcta no puede destacar por ser la más larga, la
     más detallada, la más matizada ni la única que concuerda gramaticalmente
     con el enunciado.
-14. Nada de "todas las anteriores", "ninguna de las anteriores" ni "A y B".
+19. Nada de "todas las anteriores", "ninguna de las anteriores" ni "A y B".
     Nada de absolutos como "siempre" o "nunca" que sólo aparezcan en las
     falsas: es un delator.
-15. Que acertar exija saber el dato, no descartar lo ridículo.
+20. Que acertar exija saber el dato, no descartar lo ridículo.
 
 ESTILO
-16. Pregunta de una sola frase, máximo 200 caracteres. Opciones muy cortas,
+21. Pregunta de una sola frase, máximo 200 caracteres. Opciones muy cortas,
     máximo 70 caracteres, sin numerarlas ni ponerles letras delante.
-17. No repitas pregunta ni tema dentro de la misma tanda."""
+22. No repitas pregunta ni tema dentro de la misma tanda."""
 
 
 @dataclass(frozen=True)
@@ -119,6 +135,74 @@ def output_budget(brief: Brief) -> int:
     return _TOKENS_OVERHEAD + por_pregunta * (brief.questions + EXTRA_QUESTIONS)
 
 
+HARDEN_SYSTEM = """\
+Revisas un cuestionario que acabas de escribir y lo endureces.
+
+A cada pregunta le aplicas una sola prueba: ¿se puede acertar sin haber visto,
+leído o estudiado el tema, sólo por haber oído hablar de él? Si la respuesta
+es sí, es una pregunta floja y hay que sustituirla.
+
+Reemplaza cada pregunta floja por otra del mismo tema que sí exija conocerlo:
+personajes secundarios, episodios concretos, cifras, fechas, frases textuales,
+detalles de la trama. Las que ya son exigentes las dejas intactas.
+
+Se mantienen todas las demás condiciones: mismo número de preguntas y de
+opciones, una sola correcta, falsas del mismo tipo y reconocibles, el
+enunciado sin la respuesta dentro, y nada que cambie con el tiempo.
+
+Devuelves únicamente el objeto JSON completo con TODAS las preguntas, flojas
+sustituidas y buenas conservadas, en el mismo formato que recibiste:
+{"preguntas": [{"pregunta": "...", "opciones": ["...", "..."],
+  "porque": "...", "correcta": 0}]}"""
+
+
+def _harden_prompt(brief: Brief, preguntas: list[Question]) -> str:
+    lineas = [f"TEMA: {brief.topic_or_default}", ""]
+    for i, q in enumerate(preguntas, 1):
+        lineas.append(f"{i}. {q.text}")
+        lineas.append(f"   opciones: {' | '.join(q.options)}")
+        lineas.append(f"   correcta: {q.answer}")
+    if brief.level_note:
+        lineas.append("")
+        lineas.append(f"EXIGENCIA: {brief.level_note}")
+    lineas.append("")
+    lineas.append("Revisa y devuelve el JSON completo.")
+    return "\n".join(lineas)
+
+
+async def harden(
+    llm: LLMClient, brief: Brief, preguntas: list[Question]
+) -> list[Question]:
+    """Segunda pasada: el modelo revisa su tanda y cambia las flojas.
+
+    Pedirlo de entrada no basta. Medido con ``deepseek-chat``: por mucho que
+    el prompt prohíba el dato más famoso del tema, vuelve a preguntar en qué
+    ciudad viven los Simpson y qué instrumento toca Lisa. Revisando lo que ya
+    escribió sí reconoce cuál regala la respuesta.
+
+    Si la revisión no devuelve una tanda utilizable, se queda la original: el
+    objetivo es endurecer, no arriesgarse a quedarse sin preguntas.
+    """
+    if not llm.available or not preguntas:
+        return preguntas
+
+    data = await llm.complete_json(
+        HARDEN_SYSTEM,
+        _harden_prompt(brief, preguntas),
+        temperature=0.7,
+        max_tokens=output_budget(brief),
+    )
+    revisadas = parse_questions(data, options=brief.options)
+    if len(revisadas) < len(preguntas):
+        log.info(
+            "kahoot.harden_discarded",
+            antes=len(preguntas),
+            despues=len(revisadas),
+        )
+        return preguntas
+    return revisadas
+
+
 #: Preguntas de más que se le piden al modelo.
 #:
 #: La validación descarta: opciones repetidas, respuesta fuera de rango, dos
@@ -128,12 +212,15 @@ EXTRA_QUESTIONS = 3
 
 
 def _prompt(brief: Brief) -> str:
-    return (
-        f"TEMA: {brief.topic_or_default}\n"
-        f"CANTIDAD: {brief.questions + EXTRA_QUESTIONS} preguntas\n"
-        f"OPCIONES POR PREGUNTA: {brief.options}\n\n"
-        "Devuelve ahora el JSON."
-    )
+    bloques = [
+        f"TEMA: {brief.topic_or_default}",
+        f"CANTIDAD: {brief.questions + EXTRA_QUESTIONS} preguntas",
+        f"OPCIONES POR PREGUNTA: {brief.options}",
+    ]
+    if brief.level_note:
+        bloques.append(f"EXIGENCIA: {brief.level_note}")
+    bloques.append("Devuelve ahora el JSON.")
+    return "\n".join(bloques)
 
 
 def _strip_accents(value: str) -> str:
@@ -145,6 +232,40 @@ def _clean(value: Any, limit: int) -> str:
     if not isinstance(value, str):
         return ""
     return " ".join(value.split())[:limit].strip()
+
+
+#: Palabras que no distinguen una pregunta de otra.
+_STOPWORDS = frozenset(
+    ["a", "al", "ante", "cada", "como", "con", "cual", "cuales", "cuando", "cuantos", "de", "del", "desde", "donde", "dos", "el", "ella", "ellas", "ellos", "en", "entre", "era", "es", "esa", "ese", "eso", "esta", "este", "esto", "fue", "fueron", "hay", "la", "las", "le", "les", "lo", "los", "mas", "mismo", "muy", "no", "para", "pero", "por", "porque", "que", "quien", "quienes", "se", "segun", "ser", "si", "sin", "sobre", "su", "sus", "también", "tiene", "tienen", "tras", "un", "una", "uno", "unos", "y", "ya"]
+)
+
+#: Cuánto vocabulario pueden compartir dos preguntas antes de considerarlas la
+#: misma. Por debajo se cuelan variantes ("¿qué batalla de 1819 fue decisiva?"
+#: y "¿en qué año fue la batalla de Boyacá?"); por encima se descartarían dos
+#: preguntas legítimas del mismo tema.
+SIMILARITY_LIMIT = 0.6
+
+
+def _keywords(texto: str) -> frozenset[str]:
+    limpio = "".join(
+        ch if ch.isalnum() or ch.isspace() else " "
+        for ch in _strip_accents(texto).casefold()
+    )
+    return frozenset(p for p in limpio.split() if len(p) > 2 and p not in _STOPWORDS)
+
+
+def _answer_in_question(pregunta: Question) -> bool:
+    """Si el enunciado regala la respuesta.
+
+    Sale de verdad: "¿Cómo se llama el dueño de la taberna donde trabaja Moe
+    Szyslak?" con solución "Moe Szyslak". Se compara por palabras
+    significativas y no por subcadena, para no tumbar una pregunta sobre
+    Francia cuya respuesta sea "francés".
+    """
+    respuesta = _keywords(pregunta.answer)
+    if not respuesta:
+        return False
+    return respuesta <= _keywords(pregunta.text)
 
 
 def parse_questions(data: Any, *, options: int) -> list[Question]:
@@ -167,31 +288,14 @@ def parse_questions(data: Any, *, options: int) -> list[Question]:
         pregunta = _one(cruda, options=options)
         if pregunta is None:
             continue
+        if _answer_in_question(pregunta):
+            log.info("kahoot.answer_leaked", pregunta=pregunta.text)
+            continue
         if any(_too_similar(pregunta, previa) for previa in preguntas):
             log.info("kahoot.near_duplicate", pregunta=pregunta.text)
             continue
         preguntas.append(pregunta)
     return preguntas
-
-
-#: Palabras que no distinguen una pregunta de otra.
-_STOPWORDS = frozenset(
-    ["a", "al", "ante", "cada", "como", "con", "cual", "cuales", "cuando", "cuantos", "de", "del", "desde", "donde", "dos", "el", "ella", "ellas", "ellos", "en", "entre", "era", "es", "esa", "ese", "eso", "esta", "este", "esto", "fue", "fueron", "hay", "la", "las", "le", "les", "lo", "los", "mas", "mismo", "muy", "no", "para", "pero", "por", "porque", "que", "quien", "quienes", "se", "segun", "ser", "si", "sin", "sobre", "su", "sus", "también", "tiene", "tienen", "tras", "un", "una", "uno", "unos", "y", "ya"]
-)
-
-#: Cuánto vocabulario pueden compartir dos preguntas antes de considerarlas la
-#: misma. Por debajo se cuelan variantes ("¿qué batalla de 1819 fue decisiva?"
-#: y "¿en qué año fue la batalla de Boyacá?"); por encima se descartarían dos
-#: preguntas legítimas del mismo tema.
-SIMILARITY_LIMIT = 0.6
-
-
-def _keywords(texto: str) -> frozenset[str]:
-    limpio = "".join(
-        ch if ch.isalnum() or ch.isspace() else " "
-        for ch in _strip_accents(texto).casefold()
-    )
-    return frozenset(p for p in limpio.split() if len(p) > 2 and p not in _STOPWORDS)
 
 
 def _too_similar(una: Question, otra: Question) -> bool:
@@ -301,7 +405,10 @@ async def generate(
         )
         preguntas = parse_questions(data, options=brief.options)
         if len(preguntas) >= brief.questions:
-            return shuffle_options(preguntas[: brief.questions], rng), True
+            preguntas = preguntas[: brief.questions]
+            if brief.harden:
+                preguntas = await harden(llm, brief, preguntas)
+            return shuffle_options(preguntas, rng), True
         log.warning(
             "kahoot.generation_short",
             pedidas=brief.questions,

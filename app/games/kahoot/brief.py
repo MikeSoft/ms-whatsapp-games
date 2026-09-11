@@ -79,6 +79,26 @@ _PREFIXES = (
 )
 
 
+#: Nivel de exigencia -> cómo se le dice al modelo y con qué palabras se pide.
+LEVELS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "facil": (
+        "Nivel fácil: que casi cualquiera que conozca el tema por encima "
+        "pueda acertar la mayoría.",
+        ("facil", "faciles", "sencillas", "sencillo", "basicas", "basico"),
+    ),
+    "dificil": (
+        "Nivel difícil: preguntas para quien domine el tema. La media no "
+        "debería acertar ni la mitad.",
+        ("dificil", "dificiles", "duras", "duro", "expertos", "experto",
+         "avanzadas", "avanzado", "imposibles"),
+    ),
+}
+
+_LEVEL_LOOKUP: dict[str, str] = {
+    forma: nivel for nivel, (_, formas) in LEVELS.items() for forma in formas
+}
+
+
 @dataclass(frozen=True)
 class Brief:
     """Lo que el máster pidió, ya acotado a lo que el juego admite."""
@@ -89,10 +109,21 @@ class Brief:
     #: —siempre entero— los tests juegan tandas completas en milisegundos.
     seconds: float
     options: int
+    #: ``None`` deja la calibración por defecto del prompt.
+    level: str | None = None
+    #: Segunda pasada de revisión para endurecer las preguntas.
+    harden: bool = True
 
     @property
     def topic_or_default(self) -> str:
         return self.topic or "cultura general"
+
+    @property
+    def level_note(self) -> str:
+        """La línea que se le añade al prompt, o vacía si no se pidió nivel."""
+        if self.level is None:
+            return ""
+        return LEVELS[self.level][0]
 
 
 def _strip_accents(value: str) -> str:
@@ -147,8 +178,22 @@ def parse_brief(text: str, settings: Settings) -> Brief:
         if match is not None:
             resto = resto[: match.start()] + " " + resto[match.end() :]
 
+    # El nivel se detecta antes de limpiar el tema: "preguntas difíciles de
+    # anime" pide nivel y tema en la misma frase.
+    nivel: str | None = None
+    palabras: list[str] = []
+    for palabra in resto.split():
+        clave = _strip_accents(palabra).lower().strip(",.:;")
+        if clave in _LEVEL_LOOKUP and nivel is None:
+            nivel = _LEVEL_LOOKUP[clave]
+            continue
+        palabras.append(palabra)
+    resto = " ".join(palabras)
+
     return Brief(
         topic=_clean_topic(resto),
+        level=nivel,
+        harden=settings.kahoot_harden,
         questions=_clamp(
             found["questions"],
             settings.kahoot_questions,

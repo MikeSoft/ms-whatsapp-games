@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.core.llm import LLMClient
+from app.games.kahoot import arithmetic
 from app.games.kahoot.brief import Brief
 from app.logging_conf import get_logger
 
@@ -93,10 +94,26 @@ DIFICULTAD: LAS OPCIONES FALSAS
     falsas: es un delator.
 20. Que acertar exija saber el dato, no descartar lo ridículo.
 
+ARITMÉTICA Y MATEMÁTICAS
+21. Si el tema es de cálculo, escribe la operación con notación, nunca con
+    palabras: "6+6*6+6/1", no "seis más seis por seis". Usa dígitos y los
+    signos + - * / ( ) ^ tal cual, sin espacios de más.
+22. Lo que se pone a prueba es el orden de las operaciones, no la aritmética:
+    que haya que saber que la multiplicación y la división van antes que la
+    suma y la resta, que los paréntesis manden, y cómo se comportan los
+    signos negativos. Una sola operación no sirve de pregunta.
+23. Las opciones falsas son los resultados de aplicar mal la regla, no cifras
+    al azar. En "6+6*6" la falsa que importa es 72, que es lo que sale
+    resolviendo de izquierda a derecha; ahí está el error que se pretende
+    detectar. Añade también el de olvidar un paréntesis o el de equivocar un
+    signo.
+24. Comprueba el resultado antes de darlo. Una pregunta de cálculo con la
+    respuesta mal es peor que ninguna, porque se discute y no hay defensa.
+
 ESTILO
-21. Pregunta de una sola frase, máximo 200 caracteres. Opciones muy cortas,
+25. Pregunta de una sola frase, máximo 200 caracteres. Opciones muy cortas,
     máximo 70 caracteres, sin numerarlas ni ponerles letras delante.
-22. No repitas pregunta ni tema dentro de la misma tanda."""
+26. No repitas pregunta ni tema dentro de la misma tanda."""
 
 
 @dataclass(frozen=True)
@@ -315,12 +332,27 @@ def parse_questions(data: Any, *, options: int) -> list[Question]:
         pregunta = _one(cruda, options=options)
         if pregunta is None:
             continue
-        if _answer_in_question(pregunta):
+        # Una pregunta de cálculo se juzga con su propia regla: los dígitos
+        # del resultado salen en la expresión y dos cuentas distintas pueden
+        # dar lo mismo, así que los filtros de texto la descartaban por
+        # motivos que ahí no significan nada.
+        es_cuenta = arithmetic.find_expression(pregunta.text) is not None
+        if not es_cuenta and _answer_in_question(pregunta):
             log.info("kahoot.answer_leaked", pregunta=pregunta.text)
+            continue
+        if arithmetic.check(pregunta.text, pregunta.answer) is False:
+            # El único tema cuyo resultado se puede comprobar sin preguntar a
+            # nadie. Una cuenta mal puesta se discute y no hay defensa.
+            log.info(
+                "kahoot.bad_arithmetic",
+                pregunta=pregunta.text,
+                daba=pregunta.answer,
+            )
             continue
         if any(_too_similar(pregunta, previa) for previa in preguntas):
             log.info("kahoot.near_duplicate", pregunta=pregunta.text)
             continue
+
         preguntas.append(pregunta)
     return preguntas
 
@@ -332,9 +364,22 @@ def _too_similar(una: Question, otra: Question) -> bool:
     historia salían "¿en qué año fue la batalla de Boyacá?" y "¿qué batalla
     de 1819 fue decisiva?", que se responden igual. Comparar el texto exacto
     no las pilla; comparar el vocabulario con peso, sí.
+
+    Las cuentas se comparan por la operación y no por el vocabulario: "8+2*5"
+    y "(8+2)*5" comparten todas las cifras y son justo la pareja que se quiere
+    preguntar, y dos operaciones distintas pueden dar el mismo resultado sin
+    ser la misma pregunta.
     """
     if una.text.casefold() == otra.text.casefold():
         return True
+
+    cuenta_una = arithmetic.find_expression(una.text)
+    cuenta_otra = arithmetic.find_expression(otra.text)
+    if cuenta_una is not None and cuenta_otra is not None:
+        return cuenta_una == cuenta_otra
+    if cuenta_una is not None or cuenta_otra is not None:
+        return False
+
     if una.answer.casefold() == otra.answer.casefold():
         return True
     a, b = _keywords(una.text), _keywords(otra.text)

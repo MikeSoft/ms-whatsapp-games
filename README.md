@@ -33,9 +33,12 @@ Levanta el stack —el microservicio, Redis para los buzones efímeros y WAHA co
 pasarela— y vincula el número del bot:
 
 ```bash
-docker compose up -d --build
+docker compose --profile waha up -d --build
 docker compose logs -f api
 ```
+
+Sin `--profile waha` se levantan sólo el microservicio y Redis, que es lo que
+quieres si ya tienes una pasarela: sigue leyendo.
 
 1. Abre `http://localhost:3000` y arranca la sesión de WAHA.
 2. Escanea el QR con el teléfono que hará de bot.
@@ -59,18 +62,40 @@ Y desde el WhatsApp de un máster, en el grupo:
 
 ### Si tu WAHA ya existe
 
-No hace falta levantar el del stack. Apunta la aplicación a él y su webhook a
-la aplicación:
+No levantes la del stack: `docker compose up -d --build` deja fuera el perfil
+`waha`. Apunta la aplicación a la tuya y su webhook a la aplicación:
 
 ```env
 WAHA_BASE_URL=http://192.168.0.250:3000
 WAHA_SESSION=nombre-de-tu-sesion
+WAHA_WEBHOOK_HMAC_SECRET=<openssl rand -base64 32>
 ```
 
+El webhook se configura **por sesión**. Las variables de entorno del contenedor
+de WAHA sólo valen para la que trae este stack; en una que ya existe hay que
+registrarlo con un `PUT`, que reemplaza la configuración entera —incluye lo que
+la sesión ya tuviera o lo perderás:
+
+```bash
+curl -X PUT http://192.168.0.250:3000/api/sessions/<sesion> \
+  -H 'Content-Type: application/json' \
+  -d '{"config": {"webhooks": [{
+        "url": "http://<esta-máquina>:8000/webhooks/waha",
+        "events": ["message", "poll.vote"],
+        "hmac": {"key": "<el mismo secreto del .env>"},
+        "retries": {"delaySeconds": 2, "attempts": 3, "policy": "linear"}
+      }]}}'
 ```
-webhook → http://<esta-máquina>:8000/webhooks/waha
-eventos → message, poll.vote
-```
+
+Tres cosas que cuestan un rato averiguar:
+
+- **La URL la resuelve WAHA, no tú.** Si WAHA corre en un contenedor,
+  `localhost` es su propio contenedor: usa la IP del anfitrión, o el nombre del
+  servicio si comparten red de Docker.
+- El `PUT` reinicia la sesión —vuelve a `WORKING` en segundos y sin reescanear
+  el QR, pero no lo hagas en mitad de una partida.
+- Con el secreto puesto, las entregas sin firma se rechazan con 401.
+  `docker compose logs api | grep webhook` dice si llegan firmadas.
 
 ---
 

@@ -1,6 +1,14 @@
-# Stack completo: el microservicio, Redis para los buzones efímeros y WAHA
-# como pasarela de WhatsApp. SQLite no es un servicio: vive en el volumen
-# ./data como un fichero.
+# El stack son el microservicio y Redis para los buzones efímeros. SQLite no es
+# un servicio: vive en el volumen ./data como un fichero.
+#
+# WAHA queda detrás del perfil "waha" porque muchos despliegues ya tienen una
+# pasarela con su número vinculado y no quieren una segunda:
+#
+#     docker compose up -d                    # sólo la API y Redis
+#     docker compose --profile waha up -d     # además, una WAHA nueva
+#
+# Contra una WAHA existente, apunta WAHA_BASE_URL en .env y registra el webhook
+# en su sesión: ver el README.
 
 services:
   api:
@@ -28,8 +36,6 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-      waha:
-        condition: service_started
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status == 200 else 1)"]
       interval: 30s
@@ -61,6 +67,8 @@ services:
     # grupo (WHATSAPP_ADMINS_ONLY) requiere WAHA Plus: ver README.
     # El tag por defecto sólo publica amd64; en Apple Silicon conviene
     # WAHA_IMAGE=devlikeapro/waha:arm para no emular.
+    # Sólo se levanta con --profile waha.
+    profiles: ["waha"]
     image: ${WAHA_IMAGE:-devlikeapro/waha:latest}
     container_name: wag-waha
     restart: unless-stopped

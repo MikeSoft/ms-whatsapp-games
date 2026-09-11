@@ -358,21 +358,27 @@ class Orchestrator:
                 await game.ctx.transport.set_group_locked(False)
             except Exception:  # noqa: BLE001
                 log.warning("orchestrator.unlock_failed", session_id=session_id)
-            await self._notify_manager(
+            await self._notify(
+                game.ctx.started_by,
                 f"⚠️ La partida `{session_id}` falló: {exc}\n"
-                "El grupo se ha reabierto por si quedó silenciado."
+                "El grupo se ha reabierto por si quedó silenciado.",
             )
             return result
         finally:
             self._games.pop(group_id, None)
-            await self._cleanup(session_id, result)
+            await self._cleanup(session_id, result, starter=game.ctx.started_by)
 
-    async def _cleanup(self, session_id: str, result: GameResult) -> None:
+    async def _cleanup(
+        self, session_id: str, result: GameResult, *, starter: str = ""
+    ) -> None:
         """Cierra el rastro de una partida terminada.
 
         Cada paso se protege por separado: esto corre dentro de un ``finally``
         que también se alcanza al cancelar, y ahí un ``await`` puede quedarse a
         medias. ``cancel()`` vuelve a cerrar la sesión después por ese motivo.
+
+        ``starter`` es a quien se le cuenta el desenlace. Se recibe suelto y no
+        como la partida entera porque es lo único que hace falta de ella.
         """
         if self.settings.purge_inbox_on_finish:
             try:
@@ -395,7 +401,7 @@ class Orchestrator:
 
         if result.status == "finished" and result.summary:
             try:
-                await self._notify_manager(f"🏁 `{session_id}`: {result.summary}")
+                await self._notify(starter, f"🏁 `{session_id}`: {result.summary}")
             except Exception as exc:  # noqa: BLE001
                 log.warning("orchestrator.notify_failed", session_id=session_id, error=str(exc))
 
@@ -425,9 +431,15 @@ class Orchestrator:
             await self.store.finish_game_session(running.session_id, status="cancelled")
         return True
 
-    async def _notify_manager(self, text: str) -> None:
-        """Avisa a todos los másteres: una partida rota les incumbe igual."""
-        for jid in self.settings.manager_jids:
+    async def _notify(self, jid: str, text: str) -> None:
+        """Avisa por privado a una persona concreta.
+
+        Los avisos de una partida van a quien la lanzó y a nadie más. Con
+        varios másteres, avisar a todos convierte el problema de uno en el
+        buzón de los demás, y quien puede hacer algo al respecto —relanzar,
+        cancelar, mirar qué pasó— es quien la puso en marcha.
+        """
+        if jid:
             await self.waha.send_text(jid, text)
 
     # ================================================================= estado

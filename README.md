@@ -253,7 +253,7 @@ Todas las variables están documentadas en `.env.example`. Las que más importan
 
 | Variable | Por defecto | Para qué |
 |---|---|---|
-| `MANAGER_NUMBER` | *(vacío)* | Números que pueden dar órdenes, separados por comas. Al primero se le avisa si una partida se rompe |
+| `MANAGER_NUMBER` | *(vacío)* | Números que pueden dar órdenes, separados por comas |
 | `LLM_PROVIDER` | `deepseek` | `deepseek`, `openai` o `none` |
 | `LLM_API_KEY` | *(vacío)* | Sin clave, la narrativa es estática (el juego funciona igual) |
 | `MANAGE_GROUP_PERMISSIONS` | `true` | Silenciar el grupo de noche (requiere WAHA Plus) |
@@ -367,8 +367,11 @@ esperando para siempre y dejar el grupo silenciado. Los topes que lo evitan:
   narrador falla mientras se espera, se calla y la partida sigue su curso.
 - **`MAX_ROUNDS` cierra una partida abandonada** y el tope de recursión del
   grafo se eleva solo para no chocar antes de tiempo.
-- **Un fallo dentro de una partida reabre el grupo y avisa al máster**, en vez
-  de dejar a la gente muda esperando una noche que no termina.
+- **Un fallo dentro de una partida reabre el grupo y avisa a quien la lanzó**,
+  en vez de dejar a la gente muda esperando una noche que no termina. El aviso
+  va sólo a esa persona: con varios másteres, contárselo a todos convierte el
+  problema de uno en el buzón de los demás, y quien puede relanzar o mirar qué
+  pasó es quien la puso en marcha.
 
 Todo esto está cubierto en `tests/test_resiliencia.py`, que ejecuta las rutas
 de fallo: WAHA caído a media partida, transporte lento y serializado, tarea de

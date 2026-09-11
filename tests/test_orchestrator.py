@@ -9,6 +9,8 @@ import pytest
 from app.config import Settings
 from app.core.inbox import MemoryInbox
 from app.core.llm import LLMClient
+from app.games.base import GameResult
+from app.games.werewolf.game import WerewolfGame
 from app.orchestrator.commands import parse_command
 from app.orchestrator.manager import Orchestrator
 from app.waha.client import WahaClient
@@ -380,5 +382,59 @@ async def test_el_segundo_master_lanza_y_el_resto_sigue_sin_poder(orchestrator):
     await orch.handle(_cmd("!cancelar"))
     assert orch.snapshot()["partidas_activas"] == []
     assert any("cancelada" in text.lower() for _, text in outbox)
+
+    await orch.shutdown()
+
+
+async def test_el_aviso_de_fallo_va_a_quien_lanzo_la_partida(orchestrator, monkeypatch):
+    """Sólo a esa persona.
+
+    Con varios másteres, avisar a todos convierte el problema de uno en el
+    buzón de los demás, y quien puede relanzar o mirar qué pasó es quien la
+    puso en marcha.
+    """
+    orch, outbox, _ = orchestrator(manager_number=f"{MANAGER},{DANIELA}")
+
+    async def revienta(self):
+        raise RuntimeError("la partida se atragantó")
+
+    monkeypatch.setattr(WerewolfGame, "run", revienta)
+
+    # Lanza Daniela.
+    await orch.handle(
+        inbound(DANIELA, "!juego hombreslobo", scope=Scope.GROUP, chat_id=GROUP_ID)
+    )
+    await asyncio.sleep(0.1)
+
+    avisos = [chat for chat, text in outbox if "falló" in text]
+    assert avisos == [DANIELA], "el aviso tiene que ir sólo a quien la lanzó"
+
+    await orch.shutdown()
+
+
+async def test_el_resumen_final_tambien_va_solo_a_quien_la_lanzo(orchestrator):
+    """Una partida sin jugadores acaba "aborted" y no deja resumen, así que
+    se comprueba el cierre directamente con un desenlace de los que sí."""
+    orch, outbox, _ = orchestrator(manager_number=f"{MANAGER},{DANIELA}")
+    resultado = GameResult(
+        status="finished", winner="pueblo", rounds=2, summary="Ganó el pueblo."
+    )
+
+    await orch._cleanup("sesion-de-prueba", resultado, starter=DANIELA)
+
+    resumenes = [chat for chat, text in outbox if text.startswith("🏁")]
+    assert resumenes == [DANIELA]
+
+    await orch.shutdown()
+
+
+async def test_sin_saber_quien_la_lanzo_no_se_avisa_a_nadie(orchestrator):
+    """Mejor callar que elegir un destinatario al azar entre los másteres."""
+    orch, outbox, _ = orchestrator(manager_number=f"{MANAGER},{DANIELA}")
+    resultado = GameResult(status="finished", summary="Algo pasó.")
+
+    await orch._cleanup("sesion-de-prueba", resultado, starter="")
+
+    assert not [chat for chat, text in outbox if text.startswith("🏁")]
 
     await orch.shutdown()

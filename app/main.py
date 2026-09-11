@@ -109,7 +109,7 @@ async def lifespan(app: FastAPI):
         stack.push_async_callback(orchestrator.shutdown)
         app.state.orchestrator = orchestrator
 
-        if not settings.manager_jid:
+        if not settings.manager_jids:
             log.warning(
                 "main.no_manager",
                 hint="define MANAGER_NUMBER o nadie podrá lanzar partidas",
@@ -124,7 +124,7 @@ async def lifespan(app: FastAPI):
             "main.ready",
             environment=settings.environment,
             games=registry.keys(),
-            manager=settings.manager_jid or "(sin configurar)",
+            managers=list(settings.manager_jids) or "(sin configurar)",
         )
         yield
 

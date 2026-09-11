@@ -90,7 +90,7 @@ class Orchestrator:
             log.debug("orchestrator.duplicate", message_id=message.message_id)
             return
 
-        is_manager = message.sender_id == self.settings.manager_jid
+        is_manager = self.settings.is_manager(message.sender_id)
         command = parse_command(message.text, prefix=self.settings.command_prefix)
         session_id = self._session_for(message)
 
@@ -426,8 +426,9 @@ class Orchestrator:
         return True
 
     async def _notify_manager(self, text: str) -> None:
-        if self.settings.manager_jid:
-            await self.waha.send_text(self.settings.manager_jid, text)
+        """Avisa a todos los másteres: una partida rota les incumbe igual."""
+        for jid in self.settings.manager_jids:
+            await self.waha.send_text(jid, text)
 
     # ================================================================= estado
     def snapshot(self) -> dict[str, Any]:

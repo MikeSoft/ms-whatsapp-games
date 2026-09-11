@@ -163,7 +163,7 @@ Y desde tu WhatsApp de máster, escribe en el grupo:
 
 ## Comandos del máster
 
-Sólo los acepta el número de `MANAGER_NUMBER`. El prefijo es configurable con
+Sólo los aceptan los números de `MANAGER_NUMBER`, que admite varios separados por comas. El prefijo es configurable con
 `COMMAND_PREFIX`.
 
 | Comando | Qué hace |
@@ -253,7 +253,7 @@ Todas las variables están documentadas en `.env.example`. Las que más importan
 
 | Variable | Por defecto | Para qué |
 |---|---|---|
-| `MANAGER_NUMBER` | *(vacío)* | Único número que puede dar órdenes |
+| `MANAGER_NUMBER` | *(vacío)* | Números que pueden dar órdenes, separados por comas. Al primero se le avisa si una partida se rompe |
 | `LLM_PROVIDER` | `deepseek` | `deepseek`, `openai` o `none` |
 | `LLM_API_KEY` | *(vacío)* | Sin clave, la narrativa es estática (el juego funciona igual) |
 | `MANAGE_GROUP_PERMISSIONS` | `true` | Silenciar el grupo de noche (requiere WAHA Plus) |

@@ -6,6 +6,7 @@ que el despliegue en Docker no requiera tocar el código.
 
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 from typing import Literal
 
@@ -65,7 +66,8 @@ class Settings(BaseSettings):
     waha_dry_run: bool = False
 
     # -------------------------------------------------------------- control
-    # Único número autorizado a lanzar y administrar partidas.
+    # Números autorizados a lanzar y administrar partidas. Admite varios,
+    # separados por comas o puntos y coma. Se guarda normalizado.
     manager_number: str = ""
     command_prefix: str = "!"
     # Silenciar el grupo (sólo administradores) requiere WAHA Plus.
@@ -176,7 +178,21 @@ class Settings(BaseSettings):
     @field_validator("manager_number", mode="after")
     @classmethod
     def _normalise_manager(cls, value: str) -> str:
-        return normalise_jid(value)
+        """Deja la lista en forma canónica: JID separados por comas.
+
+        Se normaliza al construir y no en cada mensaje, que la comprobación
+        corre por cada cosa que alguien escriba en el grupo.
+
+        El separador es la coma, no el espacio: un número se puede escribir
+        "+57 300 123 4567" y partirlo por los espacios lo dejaría en cuatro
+        números inventados.
+        """
+        jids: list[str] = []
+        for parte in re.split(r"[,;]+", value or ""):
+            jid = normalise_jid(parte)
+            if jid and jid not in jids:
+                jids.append(jid)
+        return ",".join(jids)
 
     @model_validator(mode="after")
     def _coherencia(self) -> Settings:
@@ -197,8 +213,18 @@ class Settings(BaseSettings):
         return value.rstrip("/")
 
     @property
+    def manager_jids(self) -> tuple[str, ...]:
+        """Todos los que pueden dar órdenes, en el orden configurado."""
+        return tuple(jid for jid in self.manager_number.split(",") if jid)
+
+    @property
     def manager_jid(self) -> str:
-        return self.manager_number
+        """El primero. Es a quien se avisa si una partida se rompe."""
+        jids = self.manager_jids
+        return jids[0] if jids else ""
+
+    def is_manager(self, jid: str) -> bool:
+        return bool(jid) and jid in self.manager_jids
 
     @property
     def llm_enabled(self) -> bool:

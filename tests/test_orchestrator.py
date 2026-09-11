@@ -329,3 +329,56 @@ async def test_por_privado_no_se_adivina_el_grupo(orchestrator):
     assert any("se juega donde se pide" in text for _, text in outbox)
 
     await orch.shutdown()
+
+
+# ============================================================ varios másteres
+DANIELA = "210195833688293@lid"
+
+
+def test_se_admiten_varios_numeros_separados_por_comas():
+    """Normalizado al construir, no en cada mensaje.
+
+    La comprobación corre por cada cosa que alguien escriba en el grupo.
+    """
+    s = make_settings(manager_number=f"{MANAGER}, {DANIELA}")
+
+    assert s.manager_jids == (MANAGER, DANIELA)
+    assert s.is_manager(MANAGER)
+    assert s.is_manager(DANIELA)
+    assert not s.is_manager("573009999999@c.us")
+
+
+def test_la_lista_tolera_como_se_escriba():
+    """Prefijo internacional, espacios dentro del número, y repetidos."""
+    s = make_settings(
+        manager_number="+57 300 111 1111; 573002222222 , 573002222222"
+    )
+
+    # Los espacios son parte del número, no separadores: partir por ellos
+    # dejaría "+57 300 111 1111" en cuatro números inventados.
+    assert s.manager_jids == ("573001111111@c.us", "573002222222@c.us")
+    # El primero es a quien se avisa si una partida se rompe.
+    assert s.manager_jid == "573001111111@c.us"
+
+
+async def test_el_segundo_master_lanza_y_el_resto_sigue_sin_poder(orchestrator):
+    orch, outbox, _ = orchestrator(manager_number=f"{MANAGER},{DANIELA}")
+
+    # Daniela lanza.
+    await orch.handle(
+        inbound(DANIELA, "!juego hombreslobo", scope=Scope.GROUP, chat_id=GROUP_ID)
+    )
+    assert len(orch.snapshot()["partidas_activas"]) == 1
+
+    # Alguien que no está en la lista, no.
+    await orch.handle(
+        inbound("573009999999@c.us", "!cancelar", scope=Scope.GROUP, chat_id=GROUP_ID)
+    )
+    assert len(orch.snapshot()["partidas_activas"]) == 1
+
+    # Y Mike puede cancelar lo que lanzó Daniela.
+    await orch.handle(_cmd("!cancelar"))
+    assert orch.snapshot()["partidas_activas"] == []
+    assert any("cancelada" in text.lower() for _, text in outbox)
+
+    await orch.shutdown()

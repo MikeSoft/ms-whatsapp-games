@@ -206,6 +206,9 @@ def make_settings(**overrides) -> Settings:
         "max_rounds": 12,
         "filler_interval_seconds": 0,
         "manage_group_permissions": True,
+        # Los reintentos no esperan: la suite comprueba cuántas veces se
+        # reintenta, no cuánto se duerme entre intento e intento.
+        "waha_retry_backoff": 0.0,
     }
     base.update(overrides)
     return Settings(**base)

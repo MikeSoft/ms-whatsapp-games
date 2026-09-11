@@ -13,8 +13,15 @@ import pytest
 from app.core.inbox import MemoryInbox, RedisInbox
 from app.core.llm import LLMClient
 from app.games.transport import WahaTransport
+from app.games.werewolf import nodes as nodes_mod
 from app.games.werewolf.game import WerewolfGame
-from app.games.werewolf.nodes import DM_BUDGET_MAX, Timers, WerewolfNodes, dm_budget
+from app.games.werewolf.nodes import (
+    DM_BUDGET_MAX,
+    DM_BUDGET_MIN,
+    Timers,
+    WerewolfNodes,
+    dm_budget,
+)
 from app.orchestrator.manager import Orchestrator
 from app.waha.client import WahaClient
 from app.waha.models import Scope, SentMessage
@@ -91,29 +98,43 @@ async def test_un_fallo_de_envio_propaga_para_que_el_supervisor_limpie():
         await game.run()
 
 
-async def test_un_envio_masivo_lento_se_corta_por_presupuesto():
-    """20 privados a 5 s serializados serían 100 s; el tope los deja en ~20.
+def test_el_presupuesto_de_los_privados_no_crece_sin_limite():
+    """Los números de producción, comprobados sin dormir ni uno solo.
 
-    Sin este límite, un WAHA lento multiplica su latencia por el número de
-    jugadores y el nodo se queda colgado más allá de su propia ventana.
+    Si el presupuesto creciera con el número de jugadores nunca llegaría a
+    cortar nada, que es justo el caso que hay que evitar en una mesa grande.
     """
-    transport = SlowSerialTransport(delay=5.0)
+    assert dm_budget(1) >= DM_BUDGET_MIN
+    assert dm_budget(20) <= DM_BUDGET_MAX
+    assert dm_budget(500) == DM_BUDGET_MAX
+
+
+async def test_un_envio_masivo_lento_se_corta_por_presupuesto(monkeypatch):
+    """Un WAHA lento no puede arrastrar al nodo más allá de su ventana.
+
+    Va a escala: el envío tardaría cinco veces el presupuesto, la misma
+    proporción que en producción, pero medida en décimas. Con los segundos de
+    verdad este test dormía cuarenta, un tercio de la suite entera, y lo que
+    comprueba —que el corte llega— no depende de la escala.
+    """
+    monkeypatch.setattr(nodes_mod, "DM_BUDGET_PER_MESSAGE", 0.1)
+    monkeypatch.setattr(nodes_mod, "DM_BUDGET_MIN", 0.5)
+    monkeypatch.setattr(nodes_mod, "DM_BUDGET_MAX", 1.0)
+
+    transport = SlowSerialTransport(delay=0.25)
     ctx, _inbox, _script = _mesa(2, transport)
     nodes = WerewolfNodes(ctx, timers=fast_timers())
 
     pares = [(make_jid(i), f"privado {i}") for i in range(1, 21)]
     presupuesto = dm_budget(len(pares))
-    # El techo es absoluto: si el presupuesto creciera con el número de
-    # jugadores, nunca llegaría a cortar nada.
-    assert presupuesto <= DM_BUDGET_MAX
+    assert presupuesto <= nodes_mod.DM_BUDGET_MAX
 
     loop = asyncio.get_running_loop()
     inicio = loop.time()
     await nodes._dm_all(pares)
     transcurrido = loop.time() - inicio
 
-    assert transcurrido < presupuesto + 2, "el envío masivo tenía que cortarse"
-    assert transcurrido < 60, "sin tope habrían sido 20 x 5 s = 100 s"
+    assert transcurrido < presupuesto + 0.5, "el envío masivo tenía que cortarse"
     # Algunos llegaron; el resto se descartó, que es el compromiso aceptado.
     assert 0 < len(transport.direct_messages) < len(pares)
 

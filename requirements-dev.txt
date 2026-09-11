@@ -2,6 +2,9 @@
 
 pytest>=9.1,<10
 pytest-asyncio>=1.4,<2
+# La suite es casi toda espera (ventanas de la partida, reintentos): en
+# paralelo baja de minutos a segundos.
+pytest-xdist>=3.8,<4
 ruff>=0.14,<1
 # Permite probar RedisInbox (la ruta de producción) sin levantar un Redis.
 fakeredis>=2.37,<3

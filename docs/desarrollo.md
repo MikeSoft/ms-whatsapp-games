@@ -82,6 +82,24 @@ privados, extiéndelo con las respuestas que toquen.
 
 Y cuando arregles un bug, **añade el caso que lo pillaba antes de arreglarlo**.
 
+### La suite corre en paralelo
+
+`pytest.ini` trae `-n auto`: los tests se reparten entre los núcleos de la
+máquina. No es un capricho de velocidad, es la forma de esta suite — juega
+partidas enteras, y casi todo su tiempo es esperar ventanas y reintentos, no
+calcular. En serie tarda unos dos minutos; en paralelo, unos veinte segundos.
+
+```bash
+.venv/bin/python -m pytest          # en paralelo, lo normal
+.venv/bin/python -m pytest -n0      # en serie: pdb, prints, un fallo raro
+```
+
+De ahí la otra regla: **un test no espera segundos de verdad**. Los tiempos
+van en `fast_timers()`, los reintentos de WAHA no duermen en la suite
+(`waha_retry_backoff=0`) y lo que se mide a escala se escala entero —el corte
+de un envío masivo se comprueba en décimas, con la misma proporción que en
+producción, y los valores de verdad se comprueban aparte sin dormirlos.
+
 
 ---
 

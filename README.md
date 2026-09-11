@@ -36,9 +36,15 @@ Levanta el stack —el microservicio, Redis para los buzones efímeros y WAHA co
 pasarela— y vincula el número del bot:
 
 ```bash
-docker compose --profile waha up -d --build
+docker compose --profile waha up -d --build --wait
 docker compose logs -f api
 ```
+
+`--wait` devuelve el control cuando el servicio responde sano, no cuando el
+contenedor arranca. Un despliegue normal —sin tocar `requirements.txt`— no
+reconstruye nada: las dependencias están en su propia capa y sólo se
+reinstalan cuando cambian, con la caché de pip montada para no volver a bajar
+de la red lo que ya se bajó.
 
 Sin `--profile waha` se levantan sólo el microservicio y Redis, que es lo que
 quieres si ya tienes una pasarela: sigue leyendo.

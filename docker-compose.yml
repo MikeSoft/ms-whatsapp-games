@@ -38,10 +38,13 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status == 200 else 1)"]
-      interval: 30s
+      # Corto a propósito: el servicio arranca en un par de segundos y así
+      # "docker compose up -d --wait" vuelve en cuanto está sano, en vez de
+      # esperar medio minuto a la primera comprobación.
+      interval: 15s
       timeout: 5s
       retries: 3
-      start_period: 15s
+      start_period: 5s
 
   redis:
     image: redis:7-alpine

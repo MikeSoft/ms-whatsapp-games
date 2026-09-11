@@ -128,8 +128,10 @@ class WahaClient:
                     )
 
             if attempt < attempts:
-                backoff = min(8.0, 0.5 * 2 ** (attempt - 1)) + random.uniform(0, 0.3)
-                await asyncio.sleep(backoff)
+                base = self._settings.waha_retry_backoff
+                if base > 0:
+                    espera = min(8.0, base * 2 ** (attempt - 1))
+                    await asyncio.sleep(espera + random.uniform(0, 0.3))
 
         raise WahaError(f"WAHA {method} {path} falló: {last_error}")
 

@@ -58,6 +58,10 @@ class Settings(BaseSettings):
     waha_send_max_retries: int = Field(default=2, ge=1)
     # Intervalo mínimo entre envíos: WhatsApp penaliza las ráfagas.
     waha_min_send_interval: float = Field(default=0.4, ge=0)
+    # Base de la espera entre reintentos, que se duplica en cada uno. En
+    # cero se reintenta al momento: es lo que usan los tests, que si no se
+    # pasan el rato durmiendo la espera de producción.
+    waha_retry_backoff: float = Field(default=0.5, ge=0)
     # WAHA puede firmar el webhook con HMAC; si se define, se valida la firma.
     waha_webhook_hmac_secret: str | None = None
     # Cabecera de secreto compartido como alternativa simple al HMAC.

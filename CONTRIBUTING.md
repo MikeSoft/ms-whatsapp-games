@@ -21,6 +21,11 @@ pero revísalo antes de `git add -A`.
 .venv/bin/python -m pytest
 ```
 
+La suite corre en paralelo (`-n auto` en `pytest.ini`) y tarda unos veinte
+segundos. Con `-n0` va en serie, que es lo que quieres para depurar con pdb.
+Un test nuevo no puede esperar segundos de verdad: usa `fast_timers()` y, si
+mides un tiempo, mídelo a escala.
+
 Las dos cosas tienen que pasar en limpio. Si un test falla, arréglalo o
 explica en el PR por qué queda rojo; no lo saltes ni lo borres.
 

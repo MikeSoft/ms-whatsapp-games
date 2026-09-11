@@ -54,6 +54,26 @@ class InboundMessage(BaseModel):
     raw: dict[str, Any] = Field(default_factory=dict)
 
     @property
+    def dedupe_key(self) -> str:
+        """Clave para descartar reenvíos del webhook sin perder correcciones.
+
+        El identificador de un voto de encuesta no identifica el voto: WhatsApp
+        lo compone con la encuesta y el votante
+        (``..._3EB0B34E7D16087FA8D743_265914461237419@lid``) y lo reutiliza
+        cuando esa misma persona cambia su respuesta. Deduplicar sólo por él
+        tira la corrección creyendo que es un reenvío, que es justo lo que
+        pasaba: quien rectificaba se quedaba con su primera respuesta.
+
+        Para los votos entra también la selección. Un reenvío trae la misma y
+        se sigue descartando; un cambio trae otra y pasa. Queda fuera el caso
+        de volver a una opción ya elegida antes en la misma pregunta: se ve
+        idéntico a un reenvío y no hay en el evento nada que los separe.
+        """
+        if self.kind == "poll_vote":
+            return f"{self.message_id}|{'|'.join(sorted(self.poll_options))}"
+        return self.message_id
+
+    @property
     def display_name(self) -> str:
         return self.sender_name or self.sender_id.split("@", 1)[0]
 

@@ -449,3 +449,29 @@ async def test_responder_rapido_y_mal_no_da_ventaja(monkeypatch):
         {"nombre": "Ana", "aciertos": 3},
         {"nombre": "Beto", "aciertos": 2},
     ]
+
+
+async def test_cambiar_de_respuesta_no_conserva_la_rapidez_del_primer_intento(
+    monkeypatch,
+):
+    """Si rectificás, tu rapidez es la de la respuesta que cuenta.
+
+    Beto dispara primero y falla, y corrige al final de la ventana. Ana
+    contesta bien a la primera, después del disparo de Beto pero antes que su
+    corrección. Los dos acaban con tres aciertos, así que el orden lo decide
+    el desempate: tiene que ganar Ana.
+    """
+
+    def votos(numero, options):
+        correcta = PREGUNTAS[numero - 1]["opciones"][PREGUNTAS[numero - 1]["correcta"]]
+        fallo = next(o for o in options if o != correcta)
+        return [(BETO, fallo), (ANA, correcta), (BETO, correcta)]
+
+    ctx, _transport, _ = _mesa(monkeypatch, votos)
+    result = await KahootGame(ctx, brief=_rapido(), breather=0).run()
+
+    assert result.players == [
+        {"nombre": "Ana", "aciertos": 3},
+        {"nombre": "Beto", "aciertos": 3},
+    ]
+    assert result.winner == "Ana"

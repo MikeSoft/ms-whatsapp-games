@@ -12,7 +12,7 @@ import asyncio
 import pytest
 
 from app.core.inbox import MemoryInbox, RedisInbox
-from app.waha.models import Scope
+from app.waha.models import InboundMessage, Scope
 from tests.conftest import GROUP_ID, inbound
 
 pytest.importorskip("fakeredis", reason="fakeredis hace falta para probar RedisInbox")
@@ -211,3 +211,49 @@ async def test_el_mensaje_conserva_todos_sus_campos(inbox):
     assert recuperado.kind == "poll_vote"
     assert recuperado.poll_options == ["2. Ana"]
     assert recuperado.timestamp == original.timestamp
+
+
+# =====================================================================
+# Deduplicación de votos de encuesta
+# =====================================================================
+def _voto(opcion: str, *, poll="3EB0B34E7D16087FA8D743", votante="265914461237419@lid"):
+    """Un voto con la forma real de WAHA.
+
+    El identificador se compone con la encuesta y el votante, no con el voto,
+    así que dos respuestas distintas de la misma persona llegan con el mismo.
+    """
+    return InboundMessage(
+        message_id=f"false_120363@g.us_{poll}_{votante}",
+        chat_id="120363@g.us",
+        sender_id=votante,
+        text=opcion,
+        scope=Scope.GROUP,
+        kind="poll_vote",
+        poll_options=[opcion],
+    )
+
+
+def test_la_clave_de_un_voto_incluye_lo_que_se_eligio():
+    """Si no, una corrección es indistinguible de un reenvío del webhook."""
+    primero = _voto("París")
+    cambio = _voto("Roma")
+
+    assert primero.message_id == cambio.message_id
+    assert primero.dedupe_key != cambio.dedupe_key
+    # Un mensaje normal sigue deduplicándose por su identificador a secas.
+    texto = InboundMessage(
+        message_id="abc", chat_id="c@c.us", sender_id="c@c.us",
+        text="hola", scope=Scope.DIRECT,
+    )
+    assert texto.dedupe_key == "abc"
+
+
+async def test_corregir_el_voto_pasa_pero_el_reenvio_no():
+    inbox = MemoryInbox()
+
+    assert await inbox.mark_seen(_voto("París").dedupe_key) is True
+    # La corrección tiene que pasar: antes se descartaba como duplicado y
+    # quien rectificaba se quedaba con su primera respuesta.
+    assert await inbox.mark_seen(_voto("Roma").dedupe_key) is True
+    # Un reenvío del mismo voto se sigue descartando.
+    assert await inbox.mark_seen(_voto("Roma").dedupe_key) is False

@@ -232,8 +232,12 @@ class KahootGame(Game):
         respuesta mientras la encuesta está abierta, y lo que vale es con qué
         se quedó.
         """
-        ultimos: dict[str, InboundMessage] = {}
-        for vote in votes:
+        # Se guarda con qué orden de llegada entró el voto que cuenta. Un
+        # diccionario conserva el orden de la *primera* inserción de cada
+        # clave, así que fiarse de él daría la rapidez del primer intento a
+        # quien disparó mal y rectificó al final.
+        ultimos: dict[str, tuple[int, InboundMessage]] = {}
+        for llegada, vote in enumerate(votes):
             if vote.from_me or vote.kind != "poll_vote":
                 continue
             # Si WAHA dice de qué encuesta es, se exige que sea la abierta.
@@ -242,13 +246,13 @@ class KahootGame(Game):
             elegidas = [o for o in vote.poll_options if o in question.options]
             if not elegidas:
                 continue
-            ultimos[vote.sender_id] = vote
+            ultimos[vote.sender_id] = (llegada, vote)
 
         # El buzón conserva el orden de llegada, así que la posición dentro de
-        # los aciertos de esta pregunta es quién respondió antes. Se recorre
-        # en ese orden y se numera sólo a quien acierta.
+        # los aciertos de esta pregunta es quién respondió antes.
         posicion = 0
-        for jid, vote in ultimos.items():
+        en_orden = sorted(ultimos.items(), key=lambda par: par[1][0])
+        for jid, (_llegada, vote) in en_orden:
             elegidas = [o for o in vote.poll_options if o in question.options]
             # Una sola opción y que sea la buena: marcar varias no es acertar.
             acierto = len(elegidas) == 1 and elegidas[0] == question.answer

@@ -252,3 +252,4 @@ def test_mensajes_repetidos_se_procesan_una_sola_vez(sent):
         segunda = len(sent)
     assert primera > 0
     assert segunda == primera
+

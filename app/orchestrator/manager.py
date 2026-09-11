@@ -84,8 +84,9 @@ class Orchestrator:
     async def handle(self, message: InboundMessage) -> None:
         """Procesa un mensaje ya normalizado."""
         # Descarta reenvíos del webhook: contar dos veces un "Yo" o un voto
-        # falsearía la partida.
-        if not await self.inbox.mark_seen(message.message_id):
+        # falsearía la partida. La clave no siempre es el identificador del
+        # mensaje; ver `InboundMessage.dedupe_key`.
+        if not await self.inbox.mark_seen(message.dedupe_key):
             log.debug("orchestrator.duplicate", message_id=message.message_id)
             return
 

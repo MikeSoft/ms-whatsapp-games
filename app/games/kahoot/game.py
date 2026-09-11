@@ -161,11 +161,27 @@ class KahootGame(Game):
         entregó uno apagado, se devuelve tal cual. Decidir gastar API sigue
         siendo suyo; esto únicamente elige con cuál.
         """
-        settings = self.ctx.settings
-        modelo = (settings.kahoot_llm_model or "").strip()
-        if not modelo or modelo == settings.llm_model or not self.ctx.llm.available:
+        if not self.ctx.llm.available:
             return self.ctx.llm
-        return LLMClient(settings.model_copy(update={"llm_model": modelo}))
+
+        settings = self.ctx.settings
+        cambios = {
+            campo: valor.strip()
+            for campo, valor in (
+                ("llm_model", settings.kahoot_llm_model),
+                ("llm_base_url", settings.kahoot_llm_base_url),
+                ("llm_api_key", settings.kahoot_llm_api_key),
+            )
+            if valor and valor.strip() != getattr(settings, campo)
+        }
+        if not cambios:
+            return self.ctx.llm
+        # Un proveedor distinto obliga a salir de "deepseek": el cliente sólo
+        # mira que no sea "none", y con base_url y clave propias el nombre del
+        # proveedor deja de describir a quién se llama.
+        if "llm_base_url" in cambios:
+            cambios["llm_provider"] = "openai"
+        return LLMClient(settings.model_copy(update=cambios))
 
     # ------------------------------------------------------------- fases
     async def _announce(self, brief: Brief) -> None:

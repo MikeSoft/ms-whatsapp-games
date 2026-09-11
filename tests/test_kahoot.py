@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import random
 
+import pytest
+
 from app.config import Settings
 from app.core.inbox import MemoryInbox
 from app.core.llm import LLMClient
@@ -685,19 +687,58 @@ async def test_con_el_endurecido_apagado_solo_hay_una_pasada(monkeypatch):
     assert len(llamadas) == 1
 
 
-def test_se_descarta_la_pregunta_que_lleva_la_respuesta_dentro():
-    """Salió de verdad: el enunciado nombraba a Moe y la solución era Moe."""
+@pytest.mark.parametrize(
+    ("enunciado", "respuesta", "se_descarta"),
+    [
+        # El caso que lo motivó: el enunciado nombraba a Moe y la solución
+        # era Moe.
+        ("¿Cómo se llama el dueño de la taberna donde trabaja Moe Szyslak?",
+         "Moe Szyslak", True),
+        ("¿En qué ciudad viven los Simpson, vecinos de Springfield?",
+         "Springfield", True),
+        ("¿Qué número tiene la casa en el 742 de Evergreen Terrace?", "742", True),
+        # Lo compartido es la palabra genérica; el dato es la cifra o la sigla,
+        # y ésa no aparece. Descartarlas era tirar preguntas buenas.
+        ("¿En qué sector de la central nuclear trabaja Homer Simpson?",
+         "Sector 7-G", False),
+        ("En «Viva Ned Flanders», ¿cuántos años revela tener Ned?",
+         "60 años", False),
+        ("¿Cuántos huesos tiene el cuerpo humano adulto?", "206", False),
+        # Y una coincidencia parcial de palabra tampoco delata.
+        ("¿Qué idioma se habla en Francia?", "Francés", False),
+    ],
+)
+def test_solo_se_descarta_la_pregunta_que_regala_su_dato(
+    enunciado, respuesta, se_descarta
+):
     cruda = {
-        "pregunta": "¿Cómo se llama el dueño de la taberna donde trabaja Moe Szyslak?",
-        "opciones": ["Moe Szyslak", "Barney Gumble", "Lenny Leonard"],
+        "pregunta": enunciado,
+        "opciones": [respuesta, "otra cosa", "una tercera"],
         "correcta": 0,
     }
-    assert parse_questions({"preguntas": [cruda]}, options=3) == []
+    salida = parse_questions({"preguntas": [cruda]}, options=3)
+    assert (salida == []) is se_descarta, enunciado
 
-    # Una coincidencia parcial de palabras no la tumba.
-    valida = {
-        "pregunta": "¿Qué idioma se habla en Francia?",
-        "opciones": ["Francés", "Alemán", "Italiano"],
-        "correcta": 0,
-    }
-    assert len(parse_questions({"preguntas": [valida]}, options=3)) == 1
+
+async def test_el_esfuerzo_de_razonamiento_llega_al_modelo(monkeypatch):
+    """Sin límite, un modelo que razona tarda 20-25 s en vez de 5.
+
+    Medido con gemini-3.8-flash sobre la misma tanda, y con las preguntas
+    saliendo igual de buenas. Se manda sólo si se configura: no todos los
+    proveedores aceptan el parámetro.
+    """
+    vistos: list[str | None] = []
+
+    async def responde(self, system, user, **kwargs):
+        vistos.append(kwargs.get("reasoning_effort"))
+        return {"preguntas": [_floja(i) for i in range(3)]}
+
+    monkeypatch.setattr(LLMClient, "complete_json", responde)
+
+    con = make_settings(kahoot_harden=False, kahoot_llm_reasoning_effort="low")
+    await generate(LLMClient(_con_modelo()), parse_brief("3 preguntas", con))
+    assert vistos == ["low"]
+
+    sin = make_settings(kahoot_harden=False)
+    await generate(LLMClient(_con_modelo()), parse_brief("3 preguntas", sin))
+    assert vistos[-1] == ""

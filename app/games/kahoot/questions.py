@@ -124,15 +124,27 @@ _TOKENS_PER_OPTION = 18
 _TOKENS_OVERHEAD = 200
 
 
+#: Holgura para los modelos que razonan antes de responder.
+#:
+#: No es teoría: `gemini-3.8-flash` gastó unos 1.570 tokens pensando antes de
+#: escribir una sola pregunta, se quedó sin presupuesto y devolvió un JSON
+#: truncado —que no se parsea, así que se pierde la tanda entera—. Esos tokens
+#: no aparecen como contenido, sólo en el total. El techo no cuesta nada: se
+#: paga lo que se genera, no lo que se autoriza.
+_REASONING_MULTIPLIER = 3
+_REASONING_FLOOR = 1500
+
+
 def output_budget(brief: Brief) -> int:
     """Tokens de salida que hay que conceder a la generación.
 
     El presupuesto de serie está pensado para una escena narrada de setenta
-    palabras. Un cuestionario de treinta preguntas no cabe ahí, y un JSON
-    truncado no se parsea: se pierde la tanda entera, no la última pregunta.
+    palabras. Un cuestionario de treinta preguntas no cabe ahí, y encima hay
+    que dejar sitio a lo que el modelo piense por el camino.
     """
     por_pregunta = _TOKENS_PER_QUESTION + _TOKENS_PER_OPTION * brief.options
-    return _TOKENS_OVERHEAD + por_pregunta * (brief.questions + EXTRA_QUESTIONS)
+    contenido = _TOKENS_OVERHEAD + por_pregunta * (brief.questions + EXTRA_QUESTIONS)
+    return contenido * _REASONING_MULTIPLIER + _REASONING_FLOOR
 
 
 HARDEN_SYSTEM = """\
@@ -191,6 +203,7 @@ async def harden(
         _harden_prompt(brief, preguntas),
         temperature=0.7,
         max_tokens=output_budget(brief),
+        reasoning_effort=brief.reasoning_effort,
     )
     revisadas = parse_questions(data, options=brief.options)
     if len(revisadas) < len(preguntas):
@@ -246,26 +259,40 @@ _STOPWORDS = frozenset(
 SIMILARITY_LIMIT = 0.6
 
 
-def _keywords(texto: str) -> frozenset[str]:
+def _keywords(texto: str, *, keep_short: bool = False) -> frozenset[str]:
+    """Las palabras con las que se distingue un texto de otro.
+
+    ``keep_short`` conserva cifras y siglas ("742", "7g", "60"). Para comparar
+    dos enunciados estorban; para comprobar si uno regala su respuesta son
+    justo lo que importa, porque suelen ser el dato que hay que saber.
+    """
     limpio = "".join(
         ch if ch.isalnum() or ch.isspace() else " "
         for ch in _strip_accents(texto).casefold()
     )
-    return frozenset(p for p in limpio.split() if len(p) > 2 and p not in _STOPWORDS)
+    palabras = limpio.split()
+    if keep_short:
+        return frozenset(p for p in palabras if p not in _STOPWORDS)
+    return frozenset(p for p in palabras if len(p) > 2 and p not in _STOPWORDS)
 
 
 def _answer_in_question(pregunta: Question) -> bool:
     """Si el enunciado regala la respuesta.
 
     Sale de verdad: "¿Cómo se llama el dueño de la taberna donde trabaja Moe
-    Szyslak?" con solución "Moe Szyslak". Se compara por palabras
-    significativas y no por subcadena, para no tumbar una pregunta sobre
-    Francia cuya respuesta sea "francés".
+    Szyslak?" con solución "Moe Szyslak". Se compara por palabras y no por
+    subcadena, para no tumbar una pregunta sobre Francia cuya respuesta sea
+    "francés".
+
+    Las cifras y siglas de la respuesta cuentan como palabra, y ahí está la
+    gracia: en "¿en qué sector trabaja Homer?" con solución "Sector 7-G", lo
+    compartido es "sector" pero el dato es el "7-G", que no aparece. Sin
+    contarlo, esa pregunta perfectamente válida se descartaba.
     """
-    respuesta = _keywords(pregunta.answer)
+    respuesta = _keywords(pregunta.answer, keep_short=True)
     if not respuesta:
         return False
-    return respuesta <= _keywords(pregunta.text)
+    return respuesta <= _keywords(pregunta.text, keep_short=True)
 
 
 def parse_questions(data: Any, *, options: int) -> list[Question]:
@@ -402,6 +429,7 @@ async def generate(
             _prompt(brief),
             temperature=0.8,
             max_tokens=output_budget(brief),
+            reasoning_effort=brief.reasoning_effort,
         )
         preguntas = parse_questions(data, options=brief.options)
         if len(preguntas) >= brief.questions:

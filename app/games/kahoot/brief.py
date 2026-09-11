@@ -113,6 +113,8 @@ class Brief:
     level: str | None = None
     #: Segunda pasada de revisión para endurecer las preguntas.
     harden: bool = True
+    #: Cuánto dejar pensar al modelo. Vacío no manda el parámetro.
+    reasoning_effort: str = ""
 
     @property
     def topic_or_default(self) -> str:
@@ -194,6 +196,7 @@ def parse_brief(text: str, settings: Settings) -> Brief:
         topic=_clean_topic(resto),
         level=nivel,
         harden=settings.kahoot_harden,
+        reasoning_effort=(settings.kahoot_llm_reasoning_effort or "").strip(),
         questions=_clamp(
             found["questions"],
             settings.kahoot_questions,

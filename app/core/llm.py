@@ -98,6 +98,7 @@ class LLMClient:
         *,
         temperature: float | None = 0.1,
         max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
     ) -> dict[str, Any] | None:
         """Pide una respuesta JSON y la parsea de forma tolerante.
 
@@ -110,6 +111,7 @@ class LLMClient:
             user,
             temperature=temperature,
             max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
             json_mode=True,
         )
         if response is None:
@@ -123,6 +125,7 @@ class LLMClient:
         *,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        reasoning_effort: str | None = None,
         json_mode: bool = False,
     ) -> str | None:
         if self._model is None:
@@ -137,6 +140,10 @@ class LLMClient:
         if json_mode:
             # DeepSeek y OpenAI comparten este parámetro.
             overrides["response_format"] = {"type": "json_object"}
+        if reasoning_effort:
+            # Sólo lo entienden los modelos que razonan, y no todos los
+            # proveedores lo aceptan: se manda únicamente si se pide.
+            overrides["reasoning_effort"] = reasoning_effort
         if overrides:
             try:
                 model = model.bind(**overrides)

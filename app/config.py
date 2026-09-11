@@ -157,7 +157,19 @@ class Settings(BaseSettings):
     # escena de setenta palabras a mitad de partida quiere latencia baja,
     # y escribir un cuestionario entero antes de empezar admite esperar más
     # a cambio de mejores preguntas.
+    # El concurso puede apuntar a otro proveedor entero, no sólo a otro
+    # modelo: lo que se le pide —un cuestionario exigente y correcto— lo
+    # hacen bien modelos que razonan, y esos son demasiado lentos para
+    # narrar una escena en mitad de una partida. Vacío usa el general.
     kahoot_llm_model: str = ""
+    kahoot_llm_base_url: str = ""
+    kahoot_llm_api_key: str = ""
+    # Cuánto se le deja pensar antes de escribir, en los modelos que razonan.
+    # Medido con gemini-3.8-flash sobre la misma tanda: sin límite tarda 20-25 s
+    # y gasta ~5.000 tokens pensando; con "low" tarda 5 s, no gasta ninguno y
+    # las preguntas salen igual de buenas. Vacío no manda el parámetro, que no
+    # todos los proveedores aceptan.
+    kahoot_llm_reasoning_effort: str = ""
     # Segunda pasada: el modelo revisa su propia tanda y cambia las preguntas
     # que se pueden acertar sin conocer el tema. Cuesta otra llamada —unos
     # cinco segundos— y es lo único que de verdad sube la dificultad: pedirlo

@@ -189,10 +189,7 @@ class KahootGame(Game):
             "🧠 *CONCURSO DE PREGUNTAS*\n\n"
             f"Tema: *{brief.topic_or_default}*\n"
             f"{brief.questions} preguntas · {brief.options} opciones · "
-            f"{brief.seconds:g} segundos cada una\n\n"
-            "Se responde tocando la encuesta. Cada una se cierra y desaparece "
-            "al acabarse el tiempo.\n"
-            "Preparando las preguntas…"
+            f"{brief.seconds:g} segundos cada una"
         )
 
     async def _lock(self, brief: Brief) -> bool:

@@ -30,7 +30,10 @@ _PATTERNS: dict[str, re.Pattern[str]] = {
     ),
     "seconds": re.compile(
         _LEAD
-        + r"(?:\b(?:que\s+)?(?:duren|dure|duran|dura|durando)\s+)?"
+        + r"(?:\b(?:que\s+)?(?:se\s+)?"
+        r"(?:duren|dure|duran|dura|durando"
+        r"|demoren|demore|demoran|demora|demorando"
+        r"|tarden|tarde|tardan|tarda|tardando)\s+)?"
         r"(?:\b(?:de|con|cada\s+una\s+de|cada\s+una)\s+)?"
         r"(?:(\d{1,3})\s*(?:segundos?|segs?\b|s\b)"
         r"|segundos?\s*[:=]?\s*(\d{1,3}))",

@@ -20,8 +20,6 @@ Máster  ›  #juego kahoot 10 preguntas de historia de Colombia
 Bot     ›  🧠 CONCURSO DE PREGUNTAS
            Tema: historia de Colombia
            10 preguntas · 5 opciones · 10 segundos cada una
-           Se responde tocando la encuesta. Cada una se cierra y
-           desaparece al acabarse el tiempo.
            🔇 (el grupo queda en silencio)
 
 Bot     ›  [encuesta] 1/10 · ¿En qué año se proclamó la independencia?

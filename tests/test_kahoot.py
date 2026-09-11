@@ -403,6 +403,17 @@ def test_la_instruccion_aguanta_como_escribe_la_gente():
         ("hazme preguntas de historia del rock cada una de 12 segundos",
          ("historia del rock", 10, 12, 5)),
         ("preguntas de fútbol colombiano", ("fútbol colombiano", 10, 10, 5)),
+        # Pedir la duración con "que se demore" dejaba el andamiaje pegado al
+        # tema, y el tema es lo único que se le pasa al modelo.
+        (
+            "1 preguntas sobre los Simpsons con 2 respuestas "
+            "y que se demore 3 segundos",
+            ("los Simpsons", 1, 3, 2),
+        ),
+        ("5 preguntas de ajedrez que se demoren 20 segundos",
+         ("ajedrez", 5, 20, 5)),
+        ("preguntas de botánica que tarden 15 segundos",
+         ("botánica", 10, 15, 5)),
     ]
     for frase, esperado in casos:
         b = parse_brief(frase, s)

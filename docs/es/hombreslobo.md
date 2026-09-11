@@ -4,6 +4,8 @@ Los Hombres Lobo de Castronegro, dirigido por el bot. Reparte los roles por
 privado, silencia el grupo de noche, recoge las acciones ocultas, narra el
 amanecer y gestiona la votación del día.
 
+[English](../werewolf.md) · 🌍 **Español**
+
 - **Comando**: `#juego hombreslobo` · alias `hombres lobo`, `hombre lobo`,
   `loboso`, `lobos`, `lobo`, `werewolf`, `castronegro`, `hl`
 - **No necesita el sufijo `ia`**: la narración del modelo es parte de
@@ -43,11 +45,15 @@ Bot     ›  🌙 NOCHE 1 — Se apagan los candiles uno por uno…
 (privado) 🧪 Esta noche los lobos atacaron a Caro. ¿Curar, veneno o nada?
 
 Bot     ›  🌅 AMANECE EL DÍA 1
+           La niebla se retira y deja ver lo que pasó de noche…
            ☠️ @Caro fue devorado por los lobos — era 🧑‍🌾 Aldeano
            Quien haya caído ya no participa: ignorad lo que escriba.
+
+           ⚖️ EL JUICIO — día 1
+           Tenéis 1 min 30 s para acusaros.
+           Sospechosos (5): …
            🔊 El chat está abierto.
 
-Bot     ›  ⚖️ EL JUICIO — tenéis 1 min 20 s para acusaros.
 Bot     ›  🗳️ [encuesta] ¿A quién linchamos?
 Bot     ›  ⚖️ VEREDICTO — ☠️ Beto fue linchado — era 🐺 Hombre Lobo
 Bot     ›  🎉 GANA EL PUEBLO
@@ -221,4 +227,4 @@ Con `MANAGE_GROUP_PERMISSIONS=false` ni se comprueba.
 
 ---
 
-Para el código: [`docs/architecture.md`](architecture.md).
+Para el código: [`docs/es/arquitectura.md`](arquitectura.md).

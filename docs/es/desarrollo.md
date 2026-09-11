@@ -2,7 +2,9 @@
 
 > Cómo montar el entorno, correr la suite y depurar contra una WAHA de verdad.
 > Las reglas de ingeniería —ramas, commits, estilo, dónde va cada cosa— están
-> en [CONTRIBUTING](../CONTRIBUTING.md) y mandan sobre este documento.
+> en [CONTRIBUTING](../../CONTRIBUTING.es.md) y mandan sobre este documento.
+
+[English](../development.md) · 🌍 **Español**
 
 ---
 
@@ -131,7 +133,7 @@ docker compose logs -f api | grep webhook
 
 Un `webhook.rejected` con `falta la cabecera HMAC` significa que el secreto
 está puesto en el `.env` pero no en la sesión de WAHA, o al revés: ver
-[la puesta en marcha](../README.md#si-tu-waha-ya-existe).
+[la puesta en marcha](../../README.es.md#si-tu-waha-ya-existe).
 
 ---
 
@@ -139,6 +141,6 @@ está puesto en el `.env` pero no en la sesión de WAHA, o al revés: ver
 
 | Documento | De qué habla |
 |---|---|
-| [`architecture.md`](architecture.md) | Mapa del código, contratos de un juego, concurrencia |
+| [`arquitectura.md`](arquitectura.md) | Mapa del código, contratos de un juego, concurrencia |
 | [`juego-nuevo.md`](juego-nuevo.md) | El paso a paso para añadir un juego |
-| [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | Ramas, commits, estilo, revisión |
+| [`CONTRIBUTING.es.md`](../../CONTRIBUTING.es.md) | Ramas, commits, estilo, revisión |

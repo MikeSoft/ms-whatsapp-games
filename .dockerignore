@@ -12,6 +12,7 @@ data
 .env
 tests
 docs
-README.md
-CONTRIBUTING.md
+.github
+*.md
+LICENSE
 docker-compose.yml

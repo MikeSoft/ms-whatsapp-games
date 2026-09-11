@@ -1,8 +1,14 @@
 [project]
 name = "ms-whatsapp-games"
 version = "0.1.0"
-description = "Máster de juegos de texto para WhatsApp con FastAPI, WAHA y LangGraph"
+description = "A game master for text games played in WhatsApp groups, on FastAPI, WAHA and LangGraph"
+readme = "README.md"
 requires-python = ">=3.11"
+license = { file = "LICENSE" }
+
+[project.urls]
+Homepage = "https://github.com/MikeSoft/ms-whatsapp-games"
+Documentation = "https://github.com/MikeSoft/ms-whatsapp-games/tree/master/docs"
 
 [tool.ruff]
 line-length = 95

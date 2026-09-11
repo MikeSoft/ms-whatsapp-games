@@ -2,8 +2,10 @@
 
 > Cómo escribir un juego y engancharlo al orquestador. Para entender antes
 > qué hay en cada módulo y qué contratos vas a usar, la
-> [arquitectura](architecture.md); las reglas de ingeniería del repositorio
-> están en [CONTRIBUTING](../CONTRIBUTING.md).
+> [arquitectura](arquitectura.md); las reglas de ingeniería del repositorio
+> están en [CONTRIBUTING](../../CONTRIBUTING.es.md).
+
+[English](../new-game.md) · 🌍 **Español**
 
 Un juego es una clase con un `spec` y un `run()`. El orquestador se encarga
 de encontrarlo, lanzarlo, encaminarle los mensajes y limpiar cuando acaba;

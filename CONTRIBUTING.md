@@ -1,9 +1,11 @@
-# Cómo contribuir
+# Contributing
 
-Reglas de ingeniería de este repositorio. Son autoritativas aquí y ganan a
-cualquier costumbre general.
+Engineering rules for this repository. They are authoritative here and win over
+any general habit.
 
-## Entorno
+🌍 **English** · [Español](CONTRIBUTING.es.md)
+
+## Environment
 
 ```bash
 python3 -m venv .venv
@@ -11,90 +13,94 @@ python3 -m venv .venv
 cp .env.example .env
 ```
 
-Python 3.11 o superior. Nunca commitees un `.env`: `.gitignore` ya lo cubre,
-pero revísalo antes de `git add -A`.
+Python 3.11 or later. Never commit a `.env`: `.gitignore` already covers it,
+but check before `git add -A`.
 
-## Antes de abrir un pull request
+## Before opening a pull request
 
 ```bash
 .venv/bin/ruff check app tests
 .venv/bin/python -m pytest
 ```
 
-La suite corre en paralelo (`-n auto` en `pytest.ini`) y tarda unos veinte
-segundos. Con `-n0` va en serie, que es lo que quieres para depurar con pdb.
-Un test nuevo no puede esperar segundos de verdad: usa `fast_timers()` y, si
-mides un tiempo, mídelo a escala.
+The suite runs in parallel (`-n auto` in `pytest.ini`) and takes about twenty
+seconds. `-n0` runs it serially, which is what you want to debug with pdb. A
+new test may not wait real seconds: use `fast_timers()` and, if you measure a
+duration, measure it to scale.
 
-Las dos cosas tienen que pasar en limpio. Si un test falla, arréglalo o
-explica en el PR por qué queda rojo; no lo saltes ni lo borres.
+Both must pass clean. If a test fails, fix it or explain in the PR why it stays
+red; do not skip it and do not delete it.
 
-## Estilo
+## Style
 
-- Línea de 95 columnas, `ruff` con la configuración de `pyproject.toml`.
-- **Identificadores en inglés, comentarios y textos de usuario en español.**
-  El producto se juega en español; el código se lee como código.
-- Los `except Exception` amplios son legítimos **sólo en los bordes** (WAHA,
-  LLM, Redis, base de datos) y siempre con `# noqa: BLE001` y un comentario que
-  diga qué se degrada. En la lógica del juego, no.
-- Type hints en las firmas públicas. `from __future__ import annotations` en
-  todos los módulos.
-- Los docstrings explican *por qué*, no *qué*. Si hace falta describir qué hace
-  la función, probablemente le falte un nombre mejor.
+- 95-column lines, `ruff` with the configuration in `pyproject.toml`.
+- **Identifiers in English, comments and user-facing text in Spanish.** The
+  product is played in Spanish; the code reads as code.
+- Broad `except Exception` is legitimate **only at the edges** (WAHA, LLM,
+  Redis, database) and always with `# noqa: BLE001` and a comment saying what
+  degrades. Not in game logic.
+- Type hints on public signatures. `from __future__ import annotations` in
+  every module.
+- Docstrings explain *why*, not *what*. If you need to describe what a function
+  does, it probably needs a better name.
 
-## Dónde va cada cosa
+## Where each thing goes
 
-- **Una regla de juego nueva** → `app/games/werewolf/` y su test en
+- **A new game rule** → `app/games/werewolf/`, with its test in
   `tests/test_werewolf_rules.py`.
-- **Un juego nuevo** → `app/games/<juego>/`, registrado con `@register` y
-  añadido a `BUILTIN_MODULES`. El paso a paso está en
-  `docs/juego-nuevo.md`, y cada juego lleva su documento en `docs/`.
-- **Una ruta de WAHA** → `app/waha/client.py`. En ningún otro sitio se hace
-  HTTP contra WAHA.
-- **Un campo de un payload de WAHA** → `app/waha/normalize.py`. El resto del
-  código sólo conoce `InboundMessage`.
-- **Un ajuste configurable** → `app/config.py` **y** `.env.example`. Los dos, o
-  nadie sabrá que existe.
+- **A new game** → `app/games/<game>/`, registered with `@register` and added
+  to `BUILTIN_MODULES`. The walkthrough is in [`docs/new-game.md`](docs/new-game.md),
+  and every game carries its own document in `docs/`.
+- **A WAHA route** → `app/waha/client.py`. HTTP against WAHA happens nowhere
+  else.
+- **A field of a WAHA payload** → `app/waha/normalize.py`. The rest of the code
+  only knows `InboundMessage`.
+- **A configurable setting** → `app/config.py` **and** `.env.example`. Both, or
+  nobody will know it exists.
 
-## Reglas que no se negocian
+## Non-negotiable rules
 
-1. **El LLM nunca decide la mecánica.** Quién muere, quién vota a quién y quién
-   gana se resuelve con reglas deterministas. El modelo narra y desambigua
-   lenguaje coloquial; nada más. Todo lo que llame al LLM debe funcionar con
-   `LLM_PROVIDER=none`.
-2. **Ningún nodo puede dejar el grupo silenciado.** Si abres un camino nuevo en
-   el grafo, asegúrate de que todas sus salidas —incluidos los errores y las
-   cancelaciones— acaban reabriendo el chat.
-3. **Nada de secretos en el grupo.** Los roles van por privado. Si añades un
-   mensaje al grupo, pregúntate qué información filtra.
-4. **El webhook no bloquea.** Encola y devuelve. Si necesitas esperar a alguien,
-   se espera dentro de la tarea de la partida, no en el handler HTTP.
+1. **The LLM never decides mechanics.** Who dies, who voted for whom and who
+   wins is settled by deterministic rules. The model narrates and disambiguates
+   colloquial language; nothing else. Everything that calls the LLM must work
+   with `LLM_PROVIDER=none`.
+2. **No node may leave the group muted.** If you open a new path in the graph,
+   make sure all of its exits — errors and cancellations included — end up
+   reopening the chat.
+3. **No secrets in the group.** Roles go by private chat. If you add a group
+   message, ask yourself what it leaks.
+4. **The webhook does not block.** It enqueues and returns. If you need to wait
+   for someone, wait inside the game's task, not in the HTTP handler.
 
 ## Tests
 
-Los tests corren sin WAHA, sin Redis y sin LLM. `tests/conftest.py` trae:
+Tests run without WAHA, without Redis and without an LLM. `tests/conftest.py`
+provides:
 
-- `FakeTransport` — apunta lo enviado al grupo y a los privados.
-- `ScriptedPlayers` — jugadores automáticos que leen los privados del bot y
-  responden como personas.
-- `fast_timers()` — tiempos en milisegundos, para jugar partidas completas.
+- `FakeTransport` — records what was sent to the group and to private chats.
+- `ScriptedPlayers` — automatic players that read the bot's DMs and answer like
+  people.
+- `fast_timers()` — timings in milliseconds, to play complete games.
 
-Prefiere un test que **juegue una partida** a uno que simule el grafo. Si
-arreglas un bug, añade el caso que lo pillaba antes de arreglarlo.
+Prefer a test that **plays a game** over one that simulates the graph. When you
+fix a bug, add the case that caught it before fixing it.
 
-## Commits y ramas
+## Commits and branches
 
-- Rama por cambio, nunca directo a la rama principal.
-- Mensajes en imperativo y en español: `añade el rol del Cazador`, no
+- A branch per change, never straight to the main branch.
+- Messages in the imperative, and in Spanish: `añade el rol del Cazador`, not
   `añadido el rol del Cazador`.
-- Asunto de 72 caracteres como máximo; el cuerpo explica el *por qué* si no es
-  obvio.
-- Sin atribución de herramientas, asistentes ni proveedores en mensajes de
-  commit, PR ni comentarios de código.
-- Nada de emojis en títulos ni descripciones de pull request.
+- Subject of 72 characters at most; the body explains the *why* when it is not
+  obvious.
+- No tool, assistant or vendor attribution in commit messages, PRs or code
+  comments.
+- No emojis in pull request titles or descriptions.
 
-## Documentación
+## Documentation
 
-En Markdown, y referenciando los ficheros por su ruta relativa al repositorio
-(`app/games/werewolf/nodes.py`), nunca por una ruta que contenga un directorio
-personal.
+In Markdown, referencing files by their repository-relative path
+(`app/games/werewolf/nodes.py`), never by a path containing a home directory.
+
+Documentation is bilingual: English under `docs/`, Spanish under `docs/es/`.
+A change that touches one should touch its counterpart — a stale translation is
+worse than no translation.

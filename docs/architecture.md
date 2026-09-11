@@ -1,21 +1,23 @@
-# Arquitectura y organización del código
+# Architecture and code layout
 
-> Este documento es la referencia para **escribir código**. Para jugar, el
-> [README](../README.md); para las reglas de cada juego,
-> [El Hombre Lobo](hombreslobo.md) y [el concurso](kahoot.md).
+> This document is the reference for **writing code**. To play, see the
+> [README](../README.md); for each game's rules, [Werewolf](werewolf.md) and
+> [the quiz](quiz.md).
 
-Este documento explica **qué hay en cada módulo**, **dónde escribir código
-nuevo** y **cómo integrar un juego con el agente** para que use tu lógica.
+🌍 **English** · [Español](es/arquitectura.md)
 
-Si sólo quieres añadir un juego, ve directo a
-[Añadir un juego nuevo](juego-nuevo.md).
+It explains **what lives in each module**, **where to write new code** and
+**how to wire a game to the agent** so that it runs your logic.
+
+If all you want is to add a game, go straight to
+[Adding a new game](new-game.md).
 
 ---
 
-## 1. La idea en una frase
+## 1. The idea in one sentence
 
-El webhook **encola** mensajes; el grafo del juego los **recoge** dentro de una
-ventana de tiempo. Nada más espera a nada.
+The webhook **enqueues** messages; the game's graph **collects** them inside a
+time window. Nothing else waits for anything.
 
 ```
    WhatsApp
@@ -23,262 +25,264 @@ ventana de tiempo. Nada más espera a nada.
       ▼
    ┌────────┐   webhook    ┌───────────────────────────────────────┐
    │  WAHA  │─────────────►│ POST /webhooks/waha                   │
-   │        │              │  1. verifica firma (HMAC / secreto)   │
-   │        │◄─────────────│  2. normaliza el payload              │
-   └────────┘  send/poll   │  3. Orchestrator.handle(mensaje)      │
+   │        │              │  1. verify signature (HMAC / secret)  │
+   │        │◄─────────────│  2. normalise the payload             │
+   └────────┘  send/poll   │  3. Orchestrator.handle(message)      │
       ▲                    └──────────────────┬────────────────────┘
       │                                       ▼
       │                              ┌──────────────────┐
       │                              │   Orchestrator   │
       │                              └────────┬─────────┘
-      │              ¿comando del máster?     │     ¿mensaje de jugador?
+      │              master command?          │        player message?
       │               ┌──────────────────────┴───────────────────┐
       │               ▼                                          ▼
-      │       lanzar / cancelar / informar              ┌─────────────────┐
-      │               │                                 │  Buzón (Redis)  │
-      │               ▼                                 │  listas + TTL   │
-      │      ┌─────────────────┐   recoge con ventana    └────────┬────────┘
-      └──────│  Juego (Game)   │◄─────────────────────────────────┘
+      │       launch / cancel / report                  ┌─────────────────┐
+      │               │                                 │ Mailbox (Redis) │
+      │               ▼                                 │  lists + TTL    │
+      │      ┌─────────────────┐  collects with window   └────────┬────────┘
+      └──────│  Game           │◄─────────────────────────────────┘
      Transport│  LangGraph      │
               └────────┬────────┘
                        ▼
-          SQLite: histórico + checkpoints
+          SQLite: history + checkpoints
 ```
 
-**Por qué así.** Una partida por turnos dura minutos y depende de que la gente
-conteste. Si el webhook esperara, WAHA daría timeout y reintentaría, duplicando
-mensajes. Al desacoplar con un buzón, WAHA recibe su `200` en milisegundos
-aunque el pueblo tarde tres minutos en votar.
+**Why this way.** A turn-based game lasts minutes and depends on people
+answering. If the webhook waited, WAHA would time out and retry, duplicating
+messages. Decoupling through a mailbox gets WAHA its `200` in milliseconds even
+when the village takes three minutes to vote.
 
 ---
 
-## 2. Mapa del código
+## 2. Code map
 
-### Bordes: hablar con el mundo
+### Edges: talking to the world
 
-| Módulo | Responsabilidad | Cuándo tocarlo |
+| Module | Responsibility | When to touch it |
 |---|---|---|
-| `app/api/routes.py` | Webhook, `/health`, `/health/ready`, `/games`, `/status` | Un endpoint nuevo |
-| `app/api/security.py` | Verificación HMAC y de secreto compartido | Otro esquema de firma |
-| `app/waha/client.py` | **Único** sitio que hace HTTP contra WAHA | Una capacidad nueva de WAHA |
-| `app/waha/normalize.py` | Payload de WAHA → `InboundMessage` | Un campo o evento nuevo de WAHA |
-| `app/waha/models.py` | Tipos de entrada y salida | Un tipo de mensaje nuevo |
+| `app/api/routes.py` | Webhook, `/health`, `/health/ready`, `/games`, `/status` | A new endpoint |
+| `app/api/security.py` | HMAC and shared-secret verification | Another signature scheme |
+| `app/waha/client.py` | The **only** place that speaks HTTP to WAHA | A new WAHA capability |
+| `app/waha/normalize.py` | WAHA payload → `InboundMessage` | A new WAHA field or event |
+| `app/waha/models.py` | Inbound and outbound types | A new kind of message |
 
-Regla: **el resto del código no conoce WAHA**. Sólo ve `InboundMessage` y el
-protocolo `Transport`. Si una versión de WAHA cambia una ruta o un campo, se
-tocan sólo esos dos ficheros.
+The rule: **the rest of the code knows nothing about WAHA**. It only sees
+`InboundMessage` and the `Transport` protocol. If a WAHA version changes a
+route or a field, those two files are the only ones touched.
 
-### Infraestructura: recordar y esperar
+### Infrastructure: remembering and waiting
 
-| Módulo | Responsabilidad | Cuándo tocarlo |
+| Module | Responsibility | When to touch it |
 |---|---|---|
-| `app/core/inbox.py` | Buzones efímeros: `RedisInbox` (producción) y `MemoryInbox` (tests) | Otro backend de colas |
-| `app/core/db.py` | Histórico de mensajes y traza de partidas en SQLite | Una tabla nueva |
-| `app/core/llm.py` | Acceso al modelo con degradación elegante | Otro proveedor |
-| `app/core/checkpointer.py` | Checkpointer de LangGraph | Cambiar la persistencia del grafo |
-| `app/config.py` | Toda la configuración por entorno | Un ajuste nuevo (**y `.env.example`**) |
-| `app/logging_conf.py` | Logging estructurado | — |
+| `app/core/inbox.py` | Ephemeral mailboxes: `RedisInbox` (production) and `MemoryInbox` (tests) | Another queue backend |
+| `app/core/db.py` | Message history and game trace in SQLite | A new table |
+| `app/core/llm.py` | Model access with graceful degradation | Another provider |
+| `app/core/checkpointer.py` | LangGraph checkpointer | Changing graph persistence |
+| `app/config.py` | All environment configuration | A new setting (**and `.env.example`**) |
+| `app/logging_conf.py` | Structured logging | — |
 
-### Orquestación: decidir qué corre
+### Orchestration: deciding what runs
 
-| Módulo | Responsabilidad | Cuándo tocarlo |
+| Module | Responsibility | When to touch it |
 |---|---|---|
-| `app/orchestrator/manager.py` | Encamina mensajes, lanza/cancela partidas, supervisa | Cambiar el ciclo de vida de una partida |
-| `app/orchestrator/commands.py` | Parseo de `#juego`, `#cancelar`… | Un comando nuevo del máster |
+| `app/orchestrator/manager.py` | Routes messages, launches/cancels games, supervises | Changing a game's lifecycle |
+| `app/orchestrator/commands.py` | Parsing `#juego`, `#cancelar`… | A new master command |
 
-### Juegos: la lógica que te interesa
+### Games: the logic you care about
 
-| Módulo | Responsabilidad | Cuándo tocarlo |
+| Module | Responsibility | When to touch it |
 |---|---|---|
-| `app/games/base.py` | Contrato: `Game`, `GameSpec`, `GameContext`, `GameResult`, `Transport` | Ampliar lo que un juego puede pedir |
-| `app/games/registry.py` | Registro y resolución de nombres y alias | Registrar un juego nuevo |
-| `app/games/transport.py` | `Transport` sobre WAHA, fijado a un grupo | — |
-| `app/games/mentions.py` | Compone mensajes etiquetando contactos | — |
-| `app/games/recruit.py` | Reclutamiento en lenguaje natural (reutilizable) | Mejorar la detección de inscripciones |
-| `app/games/werewolf/` | [El Hombre Lobo](hombreslobo.md): grafo de LangGraph, roles, narrador | — |
-| `app/games/kahoot/` | [El concurso](kahoot.md): instrucción, generación, aritmética | — |
-| `app/games/<juego>/` | **Tu juego** | Aquí escribes |
+| `app/games/base.py` | The contract: `Game`, `GameSpec`, `GameContext`, `GameResult`, `Transport` | Widening what a game may ask for |
+| `app/games/registry.py` | Registration, name and alias resolution | Registering a new game |
+| `app/games/transport.py` | `Transport` over WAHA, bound to one group | — |
+| `app/games/mentions.py` | Composes messages that tag contacts | — |
+| `app/games/recruit.py` | Natural-language sign-ups (reusable) | Improving sign-up detection |
+| `app/games/werewolf/` | [Werewolf](werewolf.md): LangGraph graph, roles, narrator | — |
+| `app/games/kahoot/` | [The quiz](quiz.md): instruction, generation, arithmetic | — |
+| `app/games/<game>/` | **Your game** | This is where you write |
 
-Los dos juegos incluidos son deliberadamente distintos por dentro: El Hombre
-Lobo usa LangGraph porque tiene fases cíclicas y estado compartido, y el
-concurso es un bucle, porque una tanda de preguntas no justifica un grafo.
-Usar LangGraph es opcional.
+The two bundled games are deliberately different inside: Werewolf uses
+LangGraph because it has cyclic phases and shared state, and the quiz is a
+plain loop, because a batch of questions does not justify a graph. Using
+LangGraph is optional.
 
 ---
 
-## 3. Los cuatro contratos que tiene que conocer un juego
+## 3. The four contracts a game has to know
 
-Todo lo que un juego necesita llega en un `GameContext`. No hay estado global
-ni imports cruzados entre juegos.
+Everything a game needs arrives in a `GameContext`. There is no global state
+and no cross-imports between games.
 
-### `transport` — hablar
+### `transport` — speaking
 
 ```python
-await ctx.transport.send_group("🌙 Cae la noche")           # al grupo
-await ctx.transport.send_group(texto, mentions=[jid, ...])  # etiquetando
-await ctx.transport.send_direct(jid, "Tu rol es…")          # privado
+await ctx.transport.send_group("🌙 Cae la noche")           # to the group
+await ctx.transport.send_group(texto, mentions=[jid, ...])  # tagging
+await ctx.transport.send_direct(jid, "Tu rol es…")          # private
 poll_id = await ctx.transport.send_poll("¿Quién?", ["1. Ana", "2. Beto"])
-await ctx.transport.delete_group_message(poll_id)           # retirarla
-nombre = await ctx.transport.contact_name(jid)              # None si no se sabe
-await ctx.transport.set_group_locked(True)                  # silenciar
+await ctx.transport.delete_group_message(poll_id)           # withdraw it
+nombre = await ctx.transport.contact_name(jid)              # None if unknown
+await ctx.transport.set_group_locked(True)                  # mute
 ```
 
-Ningún envío lanza excepción por un fallo de WhatsApp: el juego debe seguir con
-lo que le devuelvan. **Un privado que no llega significa que ese jugador no
-actúa, no que la partida se rompe.**
+No send raises on a WhatsApp failure: the game must carry on with whatever it
+gets back. **A DM that does not arrive means that player does not act, not that
+the game breaks.**
 
-Cuidado con lo que devuelve cada uno:
+Mind what each one returns:
 
-| Método | Devuelve | El caso raro |
+| Method | Returns | The odd case |
 |---|---|---|
-| `send_poll` | el id de la encuesta, o `None` | Puede venir **cadena vacía**: la encuesta se publicó pero WAHA no dio id, así que luego no se podrá retirar |
+| `send_poll` | the poll id, or `None` | It can be an **empty string**: the poll went out but WAHA gave no id, so it cannot be withdrawn later |
 | `delete_group_message` | `bool` | — |
-| `set_group_locked` | `bool` | `False` también cuando el bot no es administrador |
-| `contact_name` | el nombre, o `None` | Un voto de encuesta no trae nombre, y en grupos nuevos el votante llega como `@lid` |
+| `set_group_locked` | `bool` | `False` also when the bot is not an administrator |
+| `contact_name` | the name, or `None` | A poll vote carries no name, and in newer groups the voter arrives as an `@lid` |
 
-Para etiquetar, compón el texto con `GroupText` y pásale la lista acumulada:
+To tag, compose the text with `GroupText` and pass it the accumulated list:
 
 ```python
 from app.games.mentions import GroupText
 
-texto = GroupText(enabled=ctx.settings.use_mentions)   # uno por mensaje
+texto = GroupText(enabled=ctx.settings.use_mentions)   # one per message
 cuerpo = f"☠️ {texto.tag(jid, nombre)} ha caído"
 await ctx.transport.send_group(cuerpo, mentions=texto.mentions)
 ```
 
-WhatsApp sólo resuelve los tokens que vienen en el array, así que el compositor
-se crea **por mensaje**: sus menciones tienen que corresponder con ese texto.
+WhatsApp only resolves the tokens that come in the array, so the composer is
+created **per message**: its mentions have to match that text.
 
-### `inbox` — escuchar con plazo
+### `inbox` — listening with a deadline
 
 ```python
 mensajes = await ctx.inbox.collect(
     ctx.session_id,
-    timeout=30,                 # la ventana, en segundos
-    group=True,                 # escuchar el grupo
-    direct=[jid1, jid2],        # y/o los privados de estos jugadores
-    stop_when=lambda recogidos: ...,   # cortar antes si ya está todo
+    timeout=30,                 # the window, in seconds
+    group=True,                 # listen to the group
+    direct=[jid1, jid2],        # and/or these players' private chats
+    stop_when=lambda recogidos: ...,   # cut short once everything is in
 )
-await ctx.inbox.clear(ctx.session_id, keys=["group"])   # descartar lo viejo
+await ctx.inbox.clear(ctx.session_id, keys=["group"])   # drop the old stuff
 ```
 
-`collect` **siempre** vuelve al expirar el plazo, con lo que haya recogido. Es
-lo que hace que una partida no se cuelgue porque alguien se fue a cenar.
+`collect` **always** returns when the deadline expires, with whatever it
+gathered. That is what keeps a game from hanging because someone went for
+dinner.
 
-`stop_when` debe exigir una respuesta **interpretable**, no la mera presencia
-de un mensaje: si alguien escribe "ok" y luego su elección, cortar en el "ok"
-perdería la respuesta de verdad. Ver `WerewolfNodes._stop_when_resolved`.
+`stop_when` must require an **interpretable** answer, not the mere presence of
+a message: if someone writes "ok" and then their choice, cutting at the "ok"
+would lose the real answer. See `WerewolfNodes._stop_when_resolved`.
 
-Limpia el buzón **antes** de pedir algo nuevo, nunca después de un comando: los
-mensajes que lleguen entre el comando y tu nodo son válidos.
+Clear the mailbox **before** asking for something new, never after a command:
+messages that arrive between the command and your node are valid.
 
-### `llm` — narrar, nunca decidir
+### `llm` — narrating, never deciding
 
 ```python
-texto = await ctx.llm.complete(sistema, usuario)       # None si no hay LLM
-datos = await ctx.llm.complete_json(sistema, usuario)  # None si falla
+texto = await ctx.llm.complete(sistema, usuario)       # None if there is no LLM
+datos = await ctx.llm.complete_json(sistema, usuario)  # None if it fails
 ```
 
-**Nunca es crítico.** Devuelve `None` si no hay clave, si se agota el tiempo o
-si el proveedor falla. Todo lo que llame al LLM tiene que funcionar con
+**It is never critical.** It returns `None` if there is no key, if it times out
+or if the provider fails. Everything that calls the LLM has to work with
 `LLM_PROVIDER=none`.
 
-Y una regla de seguridad estructural: **no le pases secretos al modelo**. En El
-Hombre Lobo el narrador nunca recibe el reparto de roles, así que ni una
-inyección desde el nombre de WhatsApp de alguien podría filtrarlo — no está en
-su contexto. Pásale sólo los hechos públicos que necesite.
+And a structural security rule: **do not hand secrets to the model**. In
+Werewolf the narrator never receives the role assignments, so not even an
+injection through someone's WhatsApp display name could leak them — they are
+not in its context. Pass it only the public facts it needs.
 
-### `store` y `record` — dejar traza
+### `store` and `record` — leaving a trace
 
 ```python
 await ctx.record("noche.acciones", round_no=2, phase="noche",
                  detail={...}, is_secret=True)
 ```
 
-Opcional (`ctx.store` puede ser `None` en tests). `is_secret=True` marca lo que
-no debería aparecer en un resumen público.
+Optional (`ctx.store` can be `None` in tests). `is_secret=True` marks what
+should not show up in a public summary.
 
 ---
 
-## 4. Añadir un juego nuevo
+## 4. Adding a new game
 
-Tiene documento propio: [Añadir un juego nuevo](juego-nuevo.md). El paquete,
-la clase mínima, el registro y cómo integrarlo con el agente de LangGraph.
-
----
-
-## 5. Reglas que no se negocian
-
-Estas nacen de bugs reales que se encontraron probando el sistema.
-
-1. **El LLM no decide la mecánica.** Quién muere, quién vota a quién y quién
-   gana se resuelve con reglas en tu `parsing.py`. El modelo narra y desambigua
-   lenguaje coloquial. Todo debe funcionar con `LLM_PROVIDER=none`.
-
-2. **Ningún camino puede dejar el grupo silenciado.** Si abres una rama nueva,
-   asegúrate de que todas sus salidas —errores y cancelaciones incluidos—
-   acaban en `set_group_locked(False)`.
-
-3. **Nada de secretos en el grupo ni en el prompt.** Antes de añadir un mensaje
-   al grupo, pregúntate qué información filtra. Y no pases el reparto al LLM.
-
-4. **Los objetivos se resuelven contra los jugadores vivos.** Los números de
-   lista no se reciclan, así que resolver contra la lista completa deja que
-   alguien señale a un cadáver y pierda su turno.
-
-5. **Ante la duda, no se gasta el recurso.** Un mensaje ambiguo no consume una
-   poción, un disparo ni un voto.
-
-6. **Toda espera tiene plazo.** Ningún `collect` sin `timeout`, ningún envío
-   masivo sin presupuesto.
-
-7. **Una tarea de fondo no puede tumbar la partida.** El relleno narrativo y
-   los recordatorios capturan sus errores y siguen.
-
-8. **El webhook no bloquea.** Encola y devuelve. Si necesitas esperar, se
-   espera dentro de la tarea de la partida.
+It has its own document: [Adding a new game](new-game.md). The package, the
+minimal class, registration and how to wire it to the LangGraph agent.
 
 ---
 
-## 6. Concurrencia y rendimiento
+## 5. Non-negotiable rules
 
-Medido en este entorno (500 operaciones, SQLite en fichero con WAL):
+These come from real bugs found while testing the system.
 
-| Camino | Rendimiento |
+1. **The LLM does not decide mechanics.** Who dies, who voted for whom and who
+   wins is settled by rules in your `parsing.py`. The model narrates and
+   disambiguates colloquial language. Everything must work with
+   `LLM_PROVIDER=none`.
+
+2. **No path may leave the group muted.** If you open a new branch, make sure
+   all of its exits — errors and cancellations included — end in
+   `set_group_locked(False)`.
+
+3. **No secrets in the group or in the prompt.** Before adding a group message,
+   ask yourself what it leaks. And do not pass the role assignment to the LLM.
+
+4. **Targets are resolved against living players.** List numbers are not
+   recycled, so resolving against the full list lets someone point at a corpse
+   and waste their turn.
+
+5. **When in doubt, the resource is not spent.** An ambiguous message consumes
+   no potion, no shot and no vote.
+
+6. **Every wait has a deadline.** No `collect` without a `timeout`, no mass
+   send without a budget.
+
+7. **A background task cannot take the game down.** Narrative filler and
+   reminders catch their own errors and carry on.
+
+8. **The webhook does not block.** It enqueues and returns. If you need to
+   wait, wait inside the game's task.
+
+---
+
+## 6. Concurrency and performance
+
+Measured in this environment (500 operations, file-backed SQLite with WAL):
+
+| Path | Throughput |
 |---|---|
-| `Store.log_inbound` secuencial | ~920 ops/s |
-| `Store.log_inbound` concurrente | ~430 ops/s |
-| `MemoryInbox.push` | ~76 000 ops/s |
-| `RedisInbox.push` (fakeredis) | ~2 300 ops/s |
-| `parse_player_reference` (24 jugadores) | ~168 000 ops/s |
+| `Store.log_inbound` sequential | ~920 ops/s |
+| `Store.log_inbound` concurrent | ~430 ops/s |
+| `MemoryInbox.push` | ~76,000 ops/s |
+| `RedisInbox.push` (fakeredis) | ~2,300 ops/s |
+| `parse_player_reference` (24 players) | ~168,000 ops/s |
 
-Una partida frenética genera del orden de 10 mensajes por segundo, así que hay
-un margen de dos órdenes de magnitud. Lo que importa no es el techo sino que
-nada se serialice donde no debe:
+A frantic game generates on the order of 10 messages per second, so there are
+two orders of magnitude of headroom. What matters is not the ceiling but that
+nothing serialises where it should not:
 
-- **SQLite en WAL** (`journal_mode=WAL`, `busy_timeout`, `synchronous=NORMAL`):
-  el webhook registra mensajes mientras la partida escribe su traza. Sin WAL
-  esa mezcla da `database is locked`.
-- **Pool de SQLite de 2 conexiones sin desborde.** SQLite sólo admite un
-  escritor: con el pool por defecto (5 + 10) las conexiones pelean por el lock
-  y cada una añade un hilo de aiosqlite. Medido, 2 rinde ~25% más con la mitad
-  de hilos.
-- **Encolar va antes que registrar.** `Orchestrator.handle` empuja el mensaje
-  al buzón *antes* de escribir el histórico: un voto tiene una ventana de
-  segundos y una escritura en contención puede tardar hasta `busy_timeout`.
-- **Pool de Redis bloqueante y acotado.** El pool por defecto de redis-py
-  *lanza* `"Too many connections"` al agotarse, y eso aquí es un voto perdido.
-  `BlockingConnectionPool` encola hasta tener conexión libre.
-- **`BLPOP` con segundos enteros.** Los timeouts fraccionarios exigen Redis ≥ 6;
-  el último segundo de cada ventana se sondea.
-- **Los envíos se serializan** con un intervalo mínimo (WhatsApp penaliza las
-  ráfagas), y por eso reintentan menos que las consultas: insistir en un
-  mensaje retrasa a todos los demás.
+- **SQLite in WAL** (`journal_mode=WAL`, `busy_timeout`, `synchronous=NORMAL`):
+  the webhook records messages while the game writes its trace. Without WAL
+  that mix gives `database is locked`.
+- **A 2-connection SQLite pool with no overflow.** SQLite allows a single
+  writer: with the default pool (5 + 10) connections fight over the lock and
+  each one adds an aiosqlite thread. Measured, 2 performs ~25% better with half
+  the threads.
+- **Enqueueing comes before recording.** `Orchestrator.handle` pushes the
+  message into the mailbox *before* writing history: a vote has a window of
+  seconds, and a contended write can take up to `busy_timeout`.
+- **A blocking, bounded Redis pool.** redis-py's default pool *raises*
+  `"Too many connections"` when exhausted, and here that is a lost vote.
+  `BlockingConnectionPool` queues until a connection frees up.
+- **`BLPOP` with whole seconds.** Fractional timeouts require Redis ≥ 6; the
+  last second of each window is polled.
+- **Sends are serialised** with a minimum interval (WhatsApp punishes bursts),
+  which is also why they retry less than queries do: insisting on one message
+  delays every other one.
 
 ---
 
-## 7. Cómo se prueba
+## 7. How it is tested
 
-Los dobles de prueba, qué cubre cada fichero de la suite y el patrón de jugar
-una partida de verdad están en [Desarrollo](desarrollo.md), junto con el
-entorno y la depuración contra WAHA.
+The test doubles, what each file of the suite covers and the pattern of playing
+a real game are in [Development](development.md), along with the environment
+and debugging against WAHA.

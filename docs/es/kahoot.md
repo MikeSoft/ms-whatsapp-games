@@ -4,6 +4,8 @@ Concurso de preguntas contrarreloj. El máster pide un tema en lenguaje
 corriente, el modelo escribe el cuestionario y se publica de una en una como
 encuesta de WhatsApp.
 
+[English](../quiz.md) · 🌍 **Español**
+
 - **Comando**: `#juego kahoot <instrucción>` · alias `trivia`, `preguntas`,
   `quiz`, `concurso`, `cultura general`
 - **No necesita el sufijo `ia`**: sin modelo el juego no es lo que promete, así
@@ -249,4 +251,4 @@ tanda entera, no la última pregunta.
 
 ---
 
-Para el código: [`docs/architecture.md`](architecture.md).
+Para el código: [`docs/es/arquitectura.md`](arquitectura.md).

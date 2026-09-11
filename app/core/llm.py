@@ -97,12 +97,19 @@ class LLMClient:
         user: str,
         *,
         temperature: float | None = 0.1,
+        max_tokens: int | None = None,
     ) -> dict[str, Any] | None:
-        """Pide una respuesta JSON y la parsea de forma tolerante."""
+        """Pide una respuesta JSON y la parsea de forma tolerante.
+
+        ``max_tokens`` hace falta cuando la respuesta es una lista larga: el
+        presupuesto de serie está pensado para una escena narrada, y un JSON
+        truncado no se parsea y se pierde entero.
+        """
         response = await self._invoke(
             system,
             user,
             temperature=temperature,
+            max_tokens=max_tokens,
             json_mode=True,
         )
         if response is None:

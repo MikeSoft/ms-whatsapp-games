@@ -152,6 +152,12 @@ class Settings(BaseSettings):
     # no ha votado nadie, se reabre solo: puede que el silencio esté
     # impidiendo votar y es preferible jugar con ruido que no jugar.
     kahoot_lock_group: bool = True
+    # Modelo para escribir el cuestionario. Vacío usa el general. Existe
+    # porque las dos cosas que pedimos al modelo no se parecen: narrar una
+    # escena de setenta palabras a mitad de partida quiere latencia baja,
+    # y escribir un cuestionario entero antes de empezar admite esperar más
+    # a cambio de mejores preguntas.
+    kahoot_llm_model: str = ""
 
     @field_validator("manager_number", mode="after")
     @classmethod

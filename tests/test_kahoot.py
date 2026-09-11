@@ -12,6 +12,7 @@ from app.games.kahoot.game import KahootGame
 from app.games.kahoot.questions import (
     Question,
     fallback_questions,
+    output_budget,
     parse_questions,
     shuffle_options,
 )
@@ -91,7 +92,8 @@ def test_la_correcta_puede_venir_como_texto_en_vez_de_indice():
 
 
 def test_no_se_repite_la_misma_pregunta_en_una_tanda():
-    data = {"preguntas": [_cruda(), _cruda(), _cruda(texto="¿Capital de Italia?")]}
+    otra = _cruda(texto="¿Capital de Italia?", correcta=1)
+    data = {"preguntas": [_cruda(), _cruda(), otra]}
     assert len(parse_questions(data, options=3)) == 2
 
 
@@ -475,3 +477,125 @@ async def test_cambiar_de_respuesta_no_conserva_la_rapidez_del_primer_intento(
         {"nombre": "Beto", "aciertos": 3},
     ]
     assert result.winner == "Ana"
+
+
+def test_se_guarda_la_justificacion_aunque_no_se_publique():
+    """Se le pide al modelo que se justifique antes de señalar la correcta.
+
+    No sale al grupo: sirve para que tenga que comprometerse con un motivo
+    antes de elegir, y para poder revisar después una pregunta discutida.
+    """
+    cruda = {
+        "pregunta": "¿Capital de Francia?",
+        "opciones": ["París", "Roma", "Berlín"],
+        "porque": "París es la capital de Francia desde 1944.",
+        "correcta": 0,
+    }
+    (q,) = parse_questions({"preguntas": [cruda]}, options=3)
+
+    assert q.reason.startswith("París es la capital")
+    # Y sobrevive al barajado, que reconstruye la pregunta.
+    (barajada,) = shuffle_options([q], random.Random(1))
+    assert barajada.reason == q.reason
+
+
+def test_una_pregunta_sin_justificacion_sigue_siendo_valida():
+    """El campo ayuda a la exactitud, pero no es motivo para tirar la pregunta."""
+    (q,) = parse_questions({"preguntas": [_cruda()]}, options=3)
+    assert q.reason == ""
+
+
+def test_el_presupuesto_de_salida_crece_con_lo_que_se_pide():
+    """Un JSON truncado no se parsea: se pierde la tanda entera.
+
+    El valor de serie está pensado para una escena narrada de setenta
+    palabras, que es un orden de magnitud menos que un cuestionario.
+    """
+    s = make_settings()
+    corto = output_budget(parse_brief("5 preguntas con 3 opciones", s))
+    largo = output_budget(parse_brief("30 preguntas con 12 opciones", s))
+
+    assert corto > s.llm_max_tokens
+    assert largo > corto * 5
+
+
+def test_se_descartan_las_preguntas_que_son_la_misma_con_otras_palabras():
+    """El modelo repite el tema aunque se le pida que no.
+
+    En una tanda real de historia salieron "¿en qué año se proclamó la
+    independencia, conocida como la Batalla de Boyacá?" y "¿qué batalla de
+    1819 fue decisiva para la independencia?": se responden igual. Comparar
+    el texto exacto no las pilla.
+    """
+    crudas = [
+        {
+            "pregunta": "¿Qué batalla de 1819 fue decisiva para la independencia?",
+            "opciones": ["Boyacá", "Carabobo", "Ayacucho"],
+            "correcta": 0,
+        },
+        {
+            "pregunta": "¿Qué batalla fue decisiva para la independencia en 1819?",
+            "opciones": ["Boyacá", "Pichincha", "Junín"],
+            "correcta": 0,
+        },
+    ]
+    assert len(parse_questions({"preguntas": crudas}, options=3)) == 1
+
+
+def test_dos_preguntas_con_la_misma_respuesta_no_se_repiten():
+    """Aunque el enunciado no se parezca, acertar dos veces lo mismo aburre."""
+    crudas = [
+        {"pregunta": "¿Capital de Francia?", "opciones": ["París", "Roma", "Lyon"],
+         "correcta": 0},
+        {"pregunta": "¿Dónde está la torre Eiffel?", "opciones": ["París", "Niza", "Tours"],
+         "correcta": 0},
+    ]
+    assert len(parse_questions({"preguntas": crudas}, options=3)) == 1
+
+
+def test_dos_preguntas_distintas_del_mismo_tema_sí_conviven():
+    """El filtro no puede quedarse con una sola pregunta por materia."""
+    crudas = [
+        {"pregunta": "¿Quién pintó Las Meninas?",
+         "opciones": ["Velázquez", "Goya", "El Greco"], "correcta": 0},
+        {"pregunta": "¿En qué museo se expone La Gioconda?",
+         "opciones": ["Louvre", "Prado", "Uffizi"], "correcta": 0},
+    ]
+    assert len(parse_questions({"preguntas": crudas}, options=3)) == 2
+
+
+def _juego(**overrides) -> KahootGame:
+    ctx = make_context(settings=make_settings(**overrides), transport=FakeTransport())
+    return KahootGame(ctx, brief=_rapido(), breather=0)
+
+
+def test_el_concurso_puede_usar_un_modelo_distinto_al_de_la_narracion():
+    """Narrar en vivo y escribir un cuestionario no piden lo mismo.
+
+    Uno quiere latencia baja a mitad de partida; el otro corre antes de
+    empezar y puede pagar más espera por mejores preguntas.
+    """
+    juego = _juego(
+        llm_provider="deepseek",
+        llm_api_key="sk-de-prueba",
+        llm_model="deepseek-chat",
+        kahoot_llm_model="deepseek-flash",
+    )
+    assert juego._llm() is not juego.ctx.llm
+    assert juego._llm()._settings.llm_model == "deepseek-flash"
+
+
+def test_sin_modelo_propio_se_usa_el_general():
+    juego = _juego(
+        llm_provider="deepseek", llm_api_key="sk-de-prueba", llm_model="deepseek-chat"
+    )
+    assert juego._llm() is juego.ctx.llm
+
+
+def test_el_modelo_propio_no_enciende_un_llm_que_venia_apagado():
+    """Elegir *con cuál* no es decidir *si*: eso lo decide el orquestador."""
+    juego = _juego(llm_provider="none", kahoot_llm_model="deepseek-flash")
+
+    assert juego.ctx.llm.available is False
+    assert juego._llm() is juego.ctx.llm
+    assert juego._llm().available is False

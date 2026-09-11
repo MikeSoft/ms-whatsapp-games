@@ -18,6 +18,7 @@ import random
 from collections import defaultdict
 from dataclasses import dataclass, field
 
+from app.core.llm import LLMClient
 from app.games.base import Game, GameResult, GameSpec
 from app.games.kahoot.brief import Brief, parse_brief
 from app.games.kahoot.questions import Question, generate
@@ -127,7 +128,7 @@ class KahootGame(Game):
         brief = self._brief or parse_brief(" ".join(self.ctx.args), self.ctx.settings)
         await self._announce(brief)
 
-        self.questions, generadas = await generate(self.ctx.llm, brief, rng=self.rng)
+        self.questions, generadas = await generate(self._llm(), brief, rng=self.rng)
         if not self.questions:
             await self.ctx.transport.send_group(
                 "😕 No he podido preparar las preguntas. Volvé a intentarlo, o "
@@ -152,6 +153,19 @@ class KahootGame(Game):
 
         await self._publish_results()
         return self._result()
+
+    def _llm(self) -> LLMClient:
+        """El cliente con el que se escribe el cuestionario.
+
+        Sólo cambia el *modelo*, nunca si hay modelo: si el orquestador
+        entregó uno apagado, se devuelve tal cual. Decidir gastar API sigue
+        siendo suyo; esto únicamente elige con cuál.
+        """
+        settings = self.ctx.settings
+        modelo = (settings.kahoot_llm_model or "").strip()
+        if not modelo or modelo == settings.llm_model or not self.ctx.llm.available:
+            return self.ctx.llm
+        return LLMClient(settings.model_copy(update={"llm_model": modelo}))
 
     # ------------------------------------------------------------- fases
     async def _announce(self, brief: Brief) -> None:
@@ -199,7 +213,13 @@ class KahootGame(Game):
                 "kahoot.pregunta",
                 round_no=numero,
                 phase="pregunta",
-                detail={"respuestas": respondieron, "correcta": question.answer},
+                detail={
+                    "respuestas": respondieron,
+                    "correcta": question.answer,
+                    # Queda en la traza para poder revisar después una
+                    # pregunta que alguien discuta.
+                    "porque": question.reason,
+                },
             )
 
             if numero == 1 and locked and not respondieron:

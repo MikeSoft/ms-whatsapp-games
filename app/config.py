@@ -137,6 +137,22 @@ class Settings(BaseSettings):
     # Revelar el rol de quien muere de noche (el del linchado siempre se revela).
     werewolf_reveal_role_on_death: bool = True
 
+    # ------------------------------------------------------------- kahoot
+    kahoot_questions: int = Field(default=10, ge=1)
+    # Siete segundos es lo que pidió el producto. Es poco: entre el envío, el
+    # rate limit de WhatsApp y el webhook de vuelta, quien lea despacio no
+    # llega. Se deja configurable por comando para poder subirlo.
+    kahoot_seconds_per_question: int = Field(default=7, ge=3)
+    # Las encuestas de WhatsApp admiten hasta 12 opciones.
+    kahoot_options: int = Field(default=5, ge=2, le=12)
+    # Topes de lo que puede pedir el máster en el comando.
+    kahoot_max_questions: int = Field(default=30, ge=1)
+    kahoot_max_seconds: int = Field(default=120, ge=3)
+    # Silenciar el grupo mientras se juega. Si al cerrar la primera pregunta
+    # no ha votado nadie, se reabre solo: puede que el silencio esté
+    # impidiendo votar y es preferible jugar con ruido que no jugar.
+    kahoot_lock_group: bool = True
+
     @field_validator("manager_number", mode="after")
     @classmethod
     def _normalise_manager(cls, value: str) -> str:

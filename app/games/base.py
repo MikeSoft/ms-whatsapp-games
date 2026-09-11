@@ -36,6 +36,10 @@ class GameSpec(BaseModel):
     min_players: int = 2
     max_players: int = 30
     how_to: str = ""
+    #: El juego no tiene sentido sin modelo (por ejemplo, si genera su propio
+    #: contenido). Recibe el LLM aunque el máster no escriba ``ia``, que en
+    #: los demás juegos es lo que decide gastar API.
+    needs_llm: bool = False
 
     def rango_jugadores(self) -> str:
         return f"{self.min_players}-{self.max_players} jugadores"
@@ -72,8 +76,17 @@ class Transport(Protocol):
         """Envía un privado a un jugador."""
         ...
 
-    async def send_poll(self, question: str, options: list[str]) -> bool:
-        """Publica una encuesta; ``False`` si no se pudo crear."""
+    async def send_poll(self, question: str, options: list[str]) -> str | None:
+        """Publica una encuesta y devuelve su identificador.
+
+        ``None`` si no se pudo crear. La cadena puede venir vacía cuando el
+        envío salió bien pero WAHA no devolvió identificador: la encuesta está
+        publicada, pero no habrá forma de retirarla luego.
+        """
+        ...
+
+    async def delete_group_message(self, message_id: str) -> bool:
+        """Retira un mensaje del grupo. ``False`` si no se pudo."""
         ...
 
     async def set_group_locked(self, locked: bool) -> bool:

@@ -52,11 +52,11 @@ class WahaTransport:
                 game_session_id=self._session_id,
             )
 
-    async def send_poll(self, question: str, options: list[str]) -> bool:
+    async def send_poll(self, question: str, options: list[str]) -> str | None:
         result = await self._client.send_poll(self._group_id, question, options)
         if not result.ok:
             log.warning("transport.poll_failed", error=result.error)
-            return False
+            return None
         if self._store is not None:
             await self._store.log_outbound(
                 self._group_id,
@@ -64,7 +64,12 @@ class WahaTransport:
                 message_id=result.message_id,
                 game_session_id=self._session_id,
             )
-        return True
+        return result.message_id or ""
+
+    async def delete_group_message(self, message_id: str) -> bool:
+        if not message_id:
+            return False
+        return await self._client.delete_message(self._group_id, message_id)
 
     async def set_group_locked(self, locked: bool) -> bool:
         return await self._client.set_admins_only(self._group_id, locked)

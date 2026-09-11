@@ -257,6 +257,25 @@ class WahaClient:
             )
         return ok
 
+    async def delete_message(self, chat_id: str, message_id: str) -> bool:
+        """Borra un mensaje ya enviado ("eliminar para todos").
+
+        Se usa para retirar una encuesta cuando se acaba su tiempo, de modo
+        que no quede votable después. Es cosmético: si falla, se registra y
+        el juego sigue, porque los votos que cuentan ya se recogieron dentro
+        de la ventana.
+        """
+        if self._settings.waha_dry_run:
+            log.info("waha.dry_run.delete", chat_id=chat_id, message_id=message_id)
+            return True
+
+        session = self._settings.waha_session
+        path = f"/api/{session}/chats/{chat_id}/messages/{message_id}"
+        ok, _ = await self._try_request("DELETE", path)
+        if not ok:
+            log.warning("waha.delete_failed", chat_id=chat_id, message_id=message_id)
+        return ok
+
     # ----------------------------------------------------------------- salud
     async def session_status(self) -> dict[str, Any]:
         """Estado de la sesión de WhatsApp en WAHA."""

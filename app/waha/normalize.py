@@ -158,6 +158,7 @@ def _normalise_poll_event(event: WahaEvent) -> InboundMessage | None:
             options.append(str(option))
 
     message_id = _first_str(vote.get("id"), poll.get("id")) or f"vote-{time.time_ns()}"
+    poll_id = _poll_id(poll) or _poll_id(vote.get("poll") if isinstance(vote, dict) else None)
 
     return InboundMessage(
         message_id=message_id,
@@ -170,8 +171,23 @@ def _normalise_poll_event(event: WahaEvent) -> InboundMessage | None:
         timestamp=_coerce_timestamp(vote.get("timestamp")),
         kind="poll_vote",
         poll_options=options,
+        poll_id=poll_id,
         raw=payload,
     )
+
+
+def _poll_id(poll: Any) -> str | None:
+    """El identificador de una encuesta, venga plano o serializado.
+
+    WEBJS devuelve los id como ``{"_serialized": "..."}`` y otros motores como
+    cadena; se aceptan los dos en vez de asumir uno.
+    """
+    if not isinstance(poll, dict):
+        return None
+    raw = poll.get("id")
+    if isinstance(raw, dict):
+        raw = raw.get("_serialized")
+    return raw.strip() if isinstance(raw, str) and raw.strip() else None
 
 
 def _coerce_timestamp(value: Any) -> float:

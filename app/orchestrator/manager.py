@@ -213,7 +213,9 @@ class Orchestrator:
             )
             return
 
-        game_cls = registry.resolve(nombre)
+        # El nombre del juego y lo que el máster le pide detrás comparten
+        # línea: ``!juego kahoot preguntas de cine`` es un juego y una orden.
+        game_cls, instruccion = registry.resolve_prefix(command.args)
         if game_cls is None:
             disponibles = ", ".join(spec.key for spec in registry.specs())
             await self._reply(
@@ -242,7 +244,7 @@ class Orchestrator:
                 return
 
             running = await self._launch(
-                game_cls, group_id, message, command.args, command.flags
+                game_cls, group_id, message, instruccion, command.flags
             )
 
         spec = type(running.game).spec
@@ -291,8 +293,10 @@ class Orchestrator:
             transport=transport,
             inbox=self.inbox,
             # Sin "ia" la partida corre con los textos estáticos aunque haya
-            # clave configurada: gastar API es una decisión del máster.
-            llm=self.llm if "ia" in flags else self.llm_off,
+            # clave configurada: gastar API es una decisión del máster. La
+            # excepción son los juegos que sin modelo no existen, que lo
+            # declaran en su ficha.
+            llm=self.llm if ("ia" in flags or spec.needs_llm) else self.llm_off,
             store=self.store,
             checkpointer=self.checkpointer,
             args=args,

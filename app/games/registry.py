@@ -18,7 +18,7 @@ if TYPE_CHECKING:  # pragma: no cover
 log = get_logger("games")
 
 #: Paquetes de juegos incluidos de serie.
-BUILTIN_MODULES = ("app.games.werewolf.game",)
+BUILTIN_MODULES = ("app.games.werewolf.game", "app.games.kahoot.game")
 
 _REGISTRY: dict[str, type[Game]] = {}
 _ALIASES: dict[str, str] = {}
@@ -71,6 +71,22 @@ def resolve(name: str) -> type[Game] | None:
     load_builtin_games()
     key = _ALIASES.get(slugify(name))
     return _REGISTRY.get(key) if key else None
+
+
+def resolve_prefix(words: list[str]) -> tuple[type[Game] | None, list[str]]:
+    """Separa el juego de lo que el máster escribió detrás.
+
+    Hace falta porque las dos cosas viven en la misma línea y ninguna tiene
+    delimitador: ``!juego hombres lobo`` es un nombre de dos palabras, y
+    ``!juego kahoot preguntas de cine`` es un nombre de una y una instrucción
+    de tres. Se prueba el prefijo más largo primero, así que un nombre
+    compuesto gana sobre su primera palabra.
+    """
+    for corte in range(len(words), 0, -1):
+        game_cls = resolve(" ".join(words[:corte]))
+        if game_cls is not None:
+            return game_cls, list(words[corte:])
+    return None, list(words)
 
 
 def specs() -> list[GameSpec]:

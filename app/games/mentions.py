@@ -20,8 +20,19 @@ from dataclasses import dataclass, field
 
 
 def digits_of(jid: str) -> str:
-    """``"573001234567@c.us"`` -> ``"573001234567"``."""
-    return "".join(ch for ch in (jid or "").split("@", 1)[0] if ch.isdigit())
+    """El identificador que va en el cuerpo del mensaje, sin dominio.
+
+    ``"573001234567@c.us"`` y ``"199887766554433@lid"`` dan su parte local.
+    Un JID puede traer además sufijo de dispositivo (``573001234567:12@c.us``)
+    y hay que quitarlo antes: concatenar sus dígitos daría un número que no
+    cruza con ningún JID del array ``mentions``, y la mención quedaría como
+    texto muerto.
+
+    No se convierte entre ``@c.us`` y ``@lid``: se menciona a cada quien con
+    la forma en la que el grupo lo direcciona.
+    """
+    local = (jid or "").split("@", 1)[0].split(":", 1)[0]
+    return "".join(ch for ch in local if ch.isdigit())
 
 
 def mention_token(jid: str) -> str:

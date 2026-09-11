@@ -256,3 +256,22 @@ def test_con_menciones_desactivadas_la_narracion_queda_intacta():
 
     assert salida == "Ana acusa a Beto."
     assert texto.mentions == []
+
+
+def test_el_sufijo_de_dispositivo_no_entra_en_la_mencion():
+    """`573001234567:12@c.us` menciona a 573001234567, no a 57300123456712.
+
+    WhatsApp cruza el `@<id>` del cuerpo con la parte local del JID del array
+    `mentions`. Si se cuelan los dígitos del dispositivo, los dos números
+    dejan de coincidir y la mención queda como texto muerto: número crudo, sin
+    resalte y sin notificación.
+    """
+    assert digits_of("573001234567:12@c.us") == "573001234567"
+    assert digits_of("199887766554433:3@lid") == "199887766554433"
+    assert mention_token("573001234567:12@c.us") == "@573001234567"
+
+    texto = GroupText(enabled=True)
+    salida = tag_names("Ana habla.", {"Ana": "573001234567:12@c.us"}, texto)
+    # El cuerpo lleva la parte local; el array, el JID entero.
+    assert salida == "@573001234567 habla."
+    assert texto.mentions == ["573001234567:12@c.us"]

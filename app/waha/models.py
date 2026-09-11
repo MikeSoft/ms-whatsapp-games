@@ -47,6 +47,10 @@ class InboundMessage(BaseModel):
     kind: Literal["text", "poll_vote"] = "text"
     # Opciones elegidas cuando ``kind == "poll_vote"``.
     poll_options: list[str] = Field(default_factory=list)
+    #: Identificador de la encuesta votada, si WAHA lo trae. Sin él, un juego
+    #: que encadena encuestas no puede distinguir el voto que llega tarde a la
+    #: anterior del que corresponde a la que está abierta.
+    poll_id: str | None = None
     raw: dict[str, Any] = Field(default_factory=dict)
 
     @property

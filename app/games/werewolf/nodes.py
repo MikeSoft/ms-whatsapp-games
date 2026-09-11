@@ -1364,8 +1364,11 @@ class WerewolfNodes:
         opciones = poll_options(players)
         encuesta_ok = False
         if len(opciones) >= 2:
-            encuesta_ok = await self.ctx.transport.send_poll(
-                f"¿A quién linchamos? (día {round_no})", opciones
+            encuesta_ok = (
+                await self.ctx.transport.send_poll(
+                    f"¿A quién linchamos? (día {round_no})", opciones
+                )
+                is not None
             )
 
         instruccion = (

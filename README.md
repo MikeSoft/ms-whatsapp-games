@@ -6,8 +6,9 @@ la partida con un agente de **LangGraph**: reparte roles por privado, silencia e
 grupo de noche, recoge las acciones ocultas, narra el amanecer y gestiona la
 votación del día.
 
-El primer juego incluido es **El Hombre Lobo** (Los Hombres Lobo de Castronegro).
-El módulo de juegos es extensible: añadir otro es escribir una clase y
+Trae dos juegos: **El Hombre Lobo** (Los Hombres Lobo de Castronegro) y
+**Kahoot**, un concurso de preguntas contrarreloj cuyo cuestionario escribe el
+modelo. El módulo de juegos es extensible: añadir otro es escribir una clase y
 registrarla.
 
 > Atiende **un solo número** de WhatsApp. No es multi-tenant y no pretende serlo.
@@ -112,6 +113,7 @@ en milisegundos aunque el pueblo tarde tres minutos en decidirse.
 | `app/games/base.py` | Contrato común de los juegos |
 | `app/games/registry.py` | Registro y resolución de nombres |
 | `app/games/werewolf/` | El Hombre Lobo (grafo, roles, narrador, parseo) |
+| `app/games/kahoot/` | El concurso de preguntas (instrucción, generación, juego) |
 
 ---
 
@@ -167,13 +169,18 @@ Sólo los acepta el número de `MANAGER_NUMBER`. El prefijo es configurable con
 | Comando | Qué hace |
 |---|---|
 | `!juegos` | Lista los juegos disponibles |
-| `!juego <nombre>` | Inicia una partida (`hombreslobo`, `lobos`, `werewolf`…) |
+| `!juego <nombre>` | Inicia una partida (`hombreslobo`, `lobos`, `kahoot`, `trivia`…) |
 | `!juego <nombre> ia` | Igual, pero narrada por el modelo (ver más abajo) |
 | `!estado` | Qué partidas hay en marcha |
 | `!cancelar` | Corta la partida y reabre el grupo |
 | `!ayuda` | Recuerda los comandos |
 
 Tolera mayúsculas y acentos: `!Juego`, `!CATÁLOGO` y `!cancelar` funcionan igual.
+
+Lo que se escriba **detrás del nombre** llega al juego como instrucción, así
+que `!juego kahoot 15 preguntas de cine` lanza el concurso pidiéndole quince
+preguntas de cine. El nombre se separa probando primero el prefijo más largo,
+para que `hombres lobo` siga funcionando como nombre de dos palabras.
 
 El sufijo `ia` va en cualquier posición y admite `ai`, `llm` y `narrador`. Como
 el nombre de un juego puede llevar varias palabras, el modificador se separa
@@ -368,6 +375,71 @@ Todo esto está cubierto en `tests/test_resiliencia.py`, que ejecuta las rutas
 de fallo: WAHA caído a media partida, transporte lento y serializado, tarea de
 relleno que revienta, Redis que se va y apagado con partida a medias.
 
+## Kahoot: preguntas contrarreloj
+
+El segundo juego incluido. El máster pide un tema, el modelo escribe las
+preguntas y se publican de una en una como encuesta de WhatsApp.
+
+```
+Máster  ›  !juego kahoot 10 preguntas de historia de Colombia
+
+Bot     ›  🧠 CONCURSO DE PREGUNTAS
+           Tema: historia de Colombia
+           10 preguntas · 5 opciones · 7 segundos cada una
+           🔇 (el grupo queda en silencio)
+
+Bot     ›  [encuesta] 1/10 · ¿En qué año se proclamó la independencia?
+           … 7 segundos … la encuesta desaparece
+
+Bot     ›  📖 RESPUESTAS CORRECTAS
+           1. ¿En qué año se proclamó la independencia?
+              ✅ 1810
+           …
+
+Bot     ›  🏆 CLASIFICACIÓN
+           🥇 Ana — 8/10
+           🥈 Beto — 6/10
+```
+
+### Lo que se puede pedir en el comando
+
+Todo es opcional y va en lenguaje corriente; lo que no se diga usa el valor
+por defecto del entorno.
+
+| Se escribe | Qué cambia | Por defecto |
+|---|---|---|
+| `de historia de Roma`, `sobre cine` | El tema | cultura general |
+| `15 preguntas` | Cuántas | `KAHOOT_QUESTIONS` (10) |
+| `10 segundos` | Cuánto dura cada una | `KAHOOT_SECONDS_PER_QUESTION` (7) |
+| `4 opciones` | Alternativas por pregunta | `KAHOOT_OPTIONS` (5) |
+
+Las cifras se sacan con expresiones regulares y lo que sobra es el tema: la
+mecánica no la decide el modelo, sólo el contenido.
+
+### Detalles que importan
+
+- **Cada encuesta se retira al cerrarse su ventana**, para que no quede
+  votable cuando ya no cuenta. Y el buzón del grupo se vacía antes de abrir
+  la siguiente, de modo que un voto que llegue tarde no se cuele en la que
+  viene. Cuando WAHA informa del identificador de la encuesta votada, se
+  exige además que coincida con la abierta.
+- **Sólo cuenta el último voto de cada persona**, porque WhatsApp deja
+  cambiar la respuesta mientras la encuesta está abierta. Marcar varias
+  opciones no es acertar.
+- **Las opciones se barajan siempre**, vengan del modelo o del banco de
+  respaldo. Sin barajar se gana mirando la posición en vez de sabiendo la
+  respuesta.
+- **Empate de aciertos lo desempata el tiempo**: sin eso, el orden de dos
+  empatados dependería del azar y cambiaría entre partidas idénticas.
+- **Sin modelo se juega igual**, con un banco estático de cultura general, y
+  se avisa en el grupo de que el tema pedido no se respetó. Es la misma regla
+  que el resto del servicio: nada depende del LLM para funcionar.
+- **El grupo se silencia mientras se juega** (`KAHOOT_LOCK_GROUP`). Si al
+  cerrarse la primera pregunta no ha votado nadie, se reabre solo y se avisa:
+  no está confirmado que WhatsApp permita votar en un grupo restringido a
+  administradores, así que ante la duda se prefiere jugar con ruido a no
+  jugar. Ver *Límites conocidos*.
+
 ## Añadir un juego nuevo
 
 El módulo de juegos es extensible: un juego es una clase con su ficha, y el
@@ -456,6 +528,19 @@ desvíe de la que usan los demás tests.
 - **Si los lobos no responden, no hay ataque.** Se narra como que no se
   pusieron de acuerdo. Se prefirió eso a matar a alguien al azar: el día
   siempre avanza por linchamiento, así que la partida no se estanca.
+- **No está verificado que se pueda votar en un grupo silenciado.** El
+  concurso cierra el grupo mientras juega, y no hemos confirmado si WhatsApp
+  deja que un participante no administrador vote una encuesta en un grupo en
+  modo "sólo administradores". Si al cerrarse la primera pregunta no votó
+  nadie, el juego reabre el grupo solo y lo avisa; con
+  `KAHOOT_LOCK_GROUP=false` ni se intenta silenciarlo.
+- **Siete segundos por pregunta es muy poco.** Es el valor que se pidió, pero
+  entre el envío, el intervalo antiflood y la vuelta del webhook, quien lea
+  despacio no llega. Se sube por comando (`20 segundos`) o por entorno.
+- **La calidad de las preguntas es la del modelo.** Se valida la *forma* —una
+  sola correcta, sin opciones repetidas, tantas alternativas como se pidió—
+  pero no los hechos: una pregunta puede salir ambigua o con más de una
+  respuesta defendible.
 - **Las encuestas de WhatsApp admiten 12 opciones.** Con mesas más grandes se
   recorta la encuesta, pero los votos por texto siguen aceptando a cualquiera.
 - **Una partida por grupo a la vez.** `!cancelar` la corta.

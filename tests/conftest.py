@@ -79,9 +79,14 @@ class FakeTransport:
     #: Los JID etiquetados en cada mensaje de grupo, en el mismo orden.
     group_mentions: list[list[str]] = field(default_factory=list)
     poll_supported: bool = True
+    #: Identificadores de los mensajes retirados del grupo, en orden.
+    deleted: list[str] = field(default_factory=list)
 
     on_group: Callable[[str], Awaitable[None]] | None = None
     on_direct: Callable[[str, str], Awaitable[None]] | None = None
+    #: Se invoca con (pregunta, opciones) al publicar una encuesta, para que
+    #: los jugadores automáticos puedan votarla.
+    on_poll: Callable[[str, list[str]], Awaitable[None]] | None = None
 
     async def send_group(self, text: str, *, mentions: list[str] | None = None) -> None:
         self.group_messages.append(text)
@@ -94,10 +99,16 @@ class FakeTransport:
         if self.on_direct is not None:
             await self.on_direct(jid, text)
 
-    async def send_poll(self, question: str, options: list[str]) -> bool:
+    async def send_poll(self, question: str, options: list[str]) -> str | None:
         if not self.poll_supported:
-            return False
+            return None
         self.polls.append((question, options))
+        if self.on_poll is not None:
+            await self.on_poll(question, options)
+        return f"poll-{len(self.polls)}"
+
+    async def delete_group_message(self, message_id: str) -> bool:
+        self.deleted.append(message_id)
         return True
 
     async def set_group_locked(self, locked: bool) -> bool:

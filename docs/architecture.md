@@ -1,5 +1,9 @@
 # Arquitectura y organización del código
 
+> Este documento es la referencia para **escribir código**. Para jugar, el
+> [README](../README.md); para las reglas de cada juego,
+> [El Hombre Lobo](hombreslobo.md) y [el concurso](kahoot.md).
+
 Este documento explica **qué hay en cada módulo**, **dónde escribir código
 nuevo** y **cómo integrar un juego con el agente** para que use tu lógica.
 
@@ -91,7 +95,14 @@ tocan sólo esos dos ficheros.
 | `app/games/transport.py` | `Transport` sobre WAHA, fijado a un grupo | — |
 | `app/games/mentions.py` | Compone mensajes etiquetando contactos | — |
 | `app/games/recruit.py` | Reclutamiento en lenguaje natural (reutilizable) | Mejorar la detección de inscripciones |
+| `app/games/werewolf/` | [El Hombre Lobo](hombreslobo.md): grafo de LangGraph, roles, narrador | — |
+| `app/games/kahoot/` | [El concurso](kahoot.md): instrucción, generación, aritmética | — |
 | `app/games/<juego>/` | **Tu juego** | Aquí escribes |
+
+Los dos juegos incluidos son deliberadamente distintos por dentro: El Hombre
+Lobo usa LangGraph porque tiene fases cíclicas y estado compartido, y el
+concurso es un bucle, porque una tanda de preguntas no justifica un grafo.
+Usar LangGraph es opcional.
 
 ---
 
@@ -248,6 +259,7 @@ Añade el módulo a `BUILTIN_MODULES` en `app/games/registry.py`:
 ```python
 BUILTIN_MODULES = (
     "app.games.werewolf.game",
+    "app.games.kahoot.game",
     "app.games.mi_juego.game",
 )
 ```
@@ -426,7 +438,10 @@ nada se serialice donde no debe:
 
 ## 7. Cómo se prueba
 
-Los tests corren **sin WAHA, sin Redis y sin LLM**.
+Los tests corren **sin WAHA, sin Redis y sin LLM**, y sin leer el `.env` ni
+las variables de entorno de la máquina: `tests/conftest.py` cierra las dos
+puertas, porque con una sola un `export COMMAND_PREFIX=/` seguiría entrando y
+poniendo la suite roja sin que nadie hubiera tocado código.
 
 | Fichero | Qué cubre |
 |---|---|
@@ -438,7 +453,10 @@ Los tests corren **sin WAHA, sin Redis y sin LLM**.
 | `tests/test_resiliencia.py` | WAHA caído, transporte lento, Redis que se va |
 | `tests/test_soak.py` | Muchas partidas con jugadores caóticos + invariantes |
 | `tests/test_inbox.py` | Memoria y Redis con los **mismos** casos |
-| `tests/test_mentions.py` | Etiquetado de contactos |
+| `tests/test_mentions.py` | Etiquetado de contactos y de nombres en prosa |
+| `tests/test_kahoot.py` | Instrucción, validación de preguntas, tandas completas |
+| `tests/test_kahoot_aritmetica.py` | Evaluación de operaciones y lo que se rechaza |
+| `tests/test_waha_client.py` | Reintentos, degradación, forma de las peticiones |
 | `tests/test_api.py` | Endpoints, firma, encaminamiento |
 
 Para un juego nuevo, el patrón que mejor funciona es **jugar una partida de

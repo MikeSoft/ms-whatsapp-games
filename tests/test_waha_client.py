@@ -192,14 +192,24 @@ async def test_silenciar_el_grupo_usa_el_endpoint_de_waha():
 
     def handler(request: httpx.Request) -> httpx.Response:
         vistas.append(request)
+        # Antes de intentarlo se comprueba que la sesión sea administradora.
+        if request.url.path.startswith("/api/sessions/"):
+            return httpx.Response(200, json={"me": {"id": "573001@c.us"}})
+        if "/settings/" not in request.url.path and "/groups/" in request.url.path:
+            return httpx.Response(
+                200,
+                json={"groupMetadata": {"participants": [
+                    {"id": "573001@c.us", "isAdmin": True}
+                ]}},
+            )
         return httpx.Response(200, json={})
 
     client = build_client(handler)
     assert await client.set_admins_only(GROUP_ID, True) is True
 
-    (request,) = vistas
-    assert request.method == "PUT"
-    assert request.url.path == (
+    puesta = [r for r in vistas if r.method == "PUT"]
+    assert len(puesta) == 1
+    assert puesta[0].url.path == (
         f"/api/default/groups/{GROUP_ID}/settings/security/messages-admin-only"
     )
     await client.aclose()
@@ -209,6 +219,15 @@ async def test_sin_waha_plus_silenciar_falla_sin_romper_la_partida():
     """El endpoint es de WAHA Plus: su ausencia degrada, no aborta."""
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.startswith("/api/sessions/"):
+            return httpx.Response(200, json={"me": {"id": "573001@c.us"}})
+        if "/settings/" not in request.url.path and "/groups/" in request.url.path:
+            return httpx.Response(
+                200,
+                json={"groupMetadata": {"participants": [
+                    {"id": "573001@c.us", "isAdmin": True}
+                ]}},
+            )
         return httpx.Response(404, text="Not Found")
 
     client = build_client(handler)
@@ -266,3 +285,125 @@ async def test_lo_que_manda_waha_se_normaliza_de_vuelta():
     assert mensaje.sender_id == "573001234567@c.us"
     assert mensaje.display_name == "Ana"
     assert mensaje.text == "Yo"
+
+
+# ======================================================= ser administrador
+def _grupo(participantes: list[dict]) -> dict:
+    return {"groupMetadata": {"id": GROUP_ID, "participants": participantes}}
+
+
+def _sesion(me: dict | None) -> dict:
+    return {"name": "default", "status": "WORKING", "me": me}
+
+
+def _ruteador(sesion: dict, grupo: dict | None, vistas: list[str]):
+    def handler(request: httpx.Request) -> httpx.Response:
+        vistas.append(f"{request.method} {request.url.path}")
+        if "/groups/" in request.url.path:
+            if grupo is None:
+                return httpx.Response(404, json={"error": "no está"})
+            return httpx.Response(200, json=grupo)
+        if request.url.path.startswith("/api/sessions/"):
+            return httpx.Response(200, json=sesion)
+        return httpx.Response(200, json={})
+
+    return handler
+
+
+async def test_reconoce_que_es_admin_venga_por_c_us_o_por_lid():
+    """Un grupo direcciona a la misma sesión de una forma o de la otra.
+
+    La sesión conoce sus dos identidades; si sólo se comparara una, el bot
+    no se reconocería en la mitad de los grupos.
+    """
+    me = {"id": "573217597887@c.us", "lid": "213413535961243@lid"}
+    for forma in ("573217597887@c.us", "213413535961243@lid", "573217597887:12@c.us"):
+        vistas: list[str] = []
+        client = build_client(
+            _ruteador(_sesion(me), _grupo([{"id": forma, "isAdmin": True}]), vistas)
+        )
+        assert await client.is_group_admin(GROUP_ID) is True, forma
+
+
+async def test_un_participante_raso_no_es_admin():
+    me = {"id": "573217597887@c.us", "lid": "213413535961243@lid"}
+    client = build_client(
+        _ruteador(
+            _sesion(me),
+            _grupo([{"id": "573217597887@c.us", "isAdmin": False}]),
+            [],
+        )
+    )
+    assert await client.is_group_admin(GROUP_ID) is False
+
+
+async def test_ser_superadmin_tambien_cuenta():
+    me = {"id": "573217597887@c.us"}
+    client = build_client(
+        _ruteador(
+            _sesion(me),
+            _grupo([{"id": "573217597887@c.us", "isSuperAdmin": True}]),
+            [],
+        )
+    )
+    assert await client.is_group_admin(GROUP_ID) is True
+
+
+async def test_si_no_se_puede_saber_se_responde_que_no():
+    """Lo que depende de esto es prescindible: ante la duda, no se hace."""
+    me = {"id": "573217597887@c.us"}
+    # El grupo no responde.
+    client = build_client(_ruteador(_sesion(me), None, []))
+    assert await client.is_group_admin(GROUP_ID) is False
+
+    # La sesión no dice quién es.
+    client = build_client(_ruteador(_sesion(None), _grupo([]), []))
+    assert await client.is_group_admin(GROUP_ID) is False
+
+
+async def test_sin_ser_admin_no_se_intenta_silenciar_el_grupo():
+    """Antes se lanzaba la petición y se registraba un aviso de fallo.
+
+    No es un fallo: es una capacidad que no está, y la partida se juega sin
+    ella. Lo que no hay que hacer es pedirla.
+    """
+    vistas: list[str] = []
+    me = {"id": "573217597887@c.us"}
+    client = build_client(
+        _ruteador(
+            _sesion(me), _grupo([{"id": "573217597887@c.us", "isAdmin": False}]), vistas
+        )
+    )
+
+    assert await client.set_admins_only(GROUP_ID, True) is False
+    assert not any("messages-admin-only" in v for v in vistas)
+
+
+async def test_siendo_admin_si_se_silencia():
+    vistas: list[str] = []
+    me = {"id": "573217597887@c.us"}
+    client = build_client(
+        _ruteador(
+            _sesion(me), _grupo([{"id": "573217597887@c.us", "isAdmin": True}]), vistas
+        )
+    )
+
+    assert await client.set_admins_only(GROUP_ID, True) is True
+    assert any("messages-admin-only" in v for v in vistas)
+
+
+async def test_lo_de_ser_admin_se_pregunta_una_sola_vez():
+    """Una partida silencia y reabre en cada ronda; no son dos consultas más."""
+    vistas: list[str] = []
+    me = {"id": "573217597887@c.us"}
+    client = build_client(
+        _ruteador(
+            _sesion(me), _grupo([{"id": "573217597887@c.us", "isAdmin": True}]), vistas
+        )
+    )
+
+    for _ in range(4):
+        await client.set_admins_only(GROUP_ID, True)
+        await client.set_admins_only(GROUP_ID, False)
+
+    assert sum(1 for v in vistas if "/groups/" in v and "settings" not in v) == 1

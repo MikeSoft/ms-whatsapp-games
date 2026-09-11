@@ -27,6 +27,19 @@ class WahaError(RuntimeError):
     """Error no recuperable devuelto por WAHA."""
 
 
+def _local_part(value: Any) -> str:
+    """Los dígitos de un JID, sin dominio ni sufijo de dispositivo.
+
+    Acepta la cadena o la forma ``{"_serialized": ...}`` que devuelve WEBJS.
+    """
+    if isinstance(value, dict):
+        value = value.get("_serialized") or value.get("user")
+    if not isinstance(value, str):
+        return ""
+    local = value.split("@", 1)[0].split(":", 1)[0]
+    return "".join(ch for ch in local if ch.isdigit())
+
+
 class WahaClient:
     """Envoltorio fino sobre la API REST de WAHA.
 
@@ -51,6 +64,10 @@ class WahaClient:
         #: Nombres ya resueltos. Un nombre no cambia a media partida y a la
         #: misma gente se le pregunta en cada ronda.
         self._contact_names: dict[str, str | None] = {}
+        #: Las formas con las que esta sesión se identifica.
+        self._own_jids: frozenset[str] | None = None
+        #: Grupos en los que ya se comprobó si es administradora.
+        self._admin_in: dict[str, bool] = {}
 
     def _default_headers(self, settings: Settings) -> dict[str, str]:
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
@@ -123,6 +140,7 @@ class WahaClient:
         *,
         json: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
+        attempts: int | None = None,
     ) -> tuple[bool, Any]:
         """Variante tolerante para operaciones que no deben abortar la partida.
 
@@ -130,7 +148,9 @@ class WahaClient:
         Plus): devuelve ``(False, None)`` en lugar de propagar el error.
         """
         try:
-            return True, await self._request(method, path, json=json, params=params)
+            return True, await self._request(
+                method, path, json=json, params=params, attempts=attempts
+            )
         except WahaError as exc:
             log.warning("waha.optional_failed", path=path, error=str(exc))
             return False, None
@@ -253,6 +273,17 @@ class WahaClient:
             log.info("waha.dry_run.admins_only", group_id=group_id, admins_only=admins_only)
             return True
 
+        # Silenciar un grupo es cosa de administradores. Si no lo es, no se
+        # intenta: no es un fallo del que haya que avisar, es una capacidad
+        # que no está, y lo que depende de ella se puede jugar sin.
+        if not await self.is_group_admin(group_id):
+            log.info(
+                "waha.admins_only_skipped",
+                group_id=group_id,
+                reason="la sesión no es administradora del grupo",
+            )
+            return False
+
         session = self._settings.waha_session
         path = f"/api/{session}/groups/{group_id}/settings/security/messages-admin-only"
         ok, _ = await self._try_request("PUT", path, json={"adminsOnly": admins_only})
@@ -263,6 +294,79 @@ class WahaClient:
                 hint="requiere WAHA Plus y que el bot sea admin del grupo",
             )
         return ok
+
+    async def own_jids(self) -> frozenset[str]:
+        """Las partes locales con las que se identifica la propia sesión.
+
+        Un mismo número se direcciona como ``@c.us`` o como ``@lid`` según la
+        antigüedad del grupo, y la sesión conoce las dos. Se guardan sin
+        dominio para poder compararlas con lo que traiga cada grupo.
+        """
+        if self._own_jids is not None:
+            return self._own_jids
+
+        datos = await self.session_status()
+        me = datos.get("me") if isinstance(datos, dict) else None
+        formas = set()
+        if isinstance(me, dict):
+            for clave in ("id", "lid"):
+                local = _local_part(me.get(clave))
+                if local:
+                    formas.add(local)
+        # Sin respuesta de WAHA no se cachea: puede ser un fallo pasajero y
+        # cachear un conjunto vacío dejaría el bot sin identidad toda la vida
+        # del proceso.
+        if formas:
+            self._own_jids = frozenset(formas)
+            return self._own_jids
+        return frozenset()
+
+    async def is_group_admin(self, group_id: str) -> bool:
+        """Si esta sesión es administradora del grupo.
+
+        Se consulta para no intentar operaciones que van a fallar. Ante la
+        duda —WAHA no contesta, el grupo no trae participantes— se responde
+        ``False``: lo que depende de esto es prescindible, y es mejor no
+        hacerlo que llenar el log de errores.
+        """
+        if group_id in self._admin_in:
+            return self._admin_in[group_id]
+
+        propias = await self.own_jids()
+        if not propias:
+            return False
+
+        session = self._settings.waha_session
+        # Un solo intento: es una comprobación de capacidad, no una operación
+        # de la partida. Insistir contra un grupo que no responde sólo gasta
+        # segundos para acabar en el mismo "no" con el que se degrada igual.
+        ok, data = await self._try_request(
+            "GET", f"/api/{session}/groups/{group_id}", attempts=1
+        )
+        if not ok or not isinstance(data, dict):
+            return False
+
+        metadata = data.get("groupMetadata")
+        if not isinstance(metadata, dict):
+            metadata = data
+        participantes = metadata.get("participants")
+        if not isinstance(participantes, list):
+            return False
+
+        for participante in participantes:
+            if not isinstance(participante, dict):
+                continue
+            if _local_part(participante.get("id")) not in propias:
+                continue
+            es_admin = bool(
+                participante.get("isAdmin") or participante.get("isSuperAdmin")
+            )
+            self._admin_in[group_id] = es_admin
+            return es_admin
+
+        # No figura entre los participantes: no está en el grupo.
+        self._admin_in[group_id] = False
+        return False
 
     async def contact_name(self, jid: str) -> str | None:
         """Nombre con el que mostrar a alguien, o ``None`` si no se sabe.

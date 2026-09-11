@@ -513,6 +513,13 @@ desvíe de la que usan los demás tests.
 
 ## Límites conocidos
 
+- **Silenciar el grupo requiere ser administrador.** Antes de intentarlo se
+  comprueba si la sesión lo es, cotejando sus dos identidades (`@c.us` y
+  `@lid`, porque cada grupo direcciona con una u otra) contra la lista de
+  participantes. Si no lo es, no se intenta y la partida sigue: el silencio
+  pasa a ser una convención social. La comprobación se hace una vez por
+  grupo y con un solo intento, que para una capacidad opcional insistir sólo
+  gasta segundos para llegar al mismo "no".
 - **Silenciar el grupo requiere WAHA Plus.** El endpoint
   `PUT /api/{session}/groups/{id}/settings/security/messages-admin-only` no
   está en la imagen `core` gratuita. Si no está disponible, se registra un

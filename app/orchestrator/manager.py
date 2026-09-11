@@ -229,8 +229,8 @@ class Orchestrator:
         if not group_id:
             await self._reply(
                 message,
-                "No sé en qué grupo jugar. Manda el comando dentro del grupo, "
-                "o configura `GAME_GROUP_ID` en el entorno.",
+                "No sé en qué grupo jugar: la partida se juega donde se pide. "
+                "Manda el comando dentro del grupo.",
             )
             return
 
@@ -261,12 +261,18 @@ class Orchestrator:
         )
 
     def _resolve_group(self, message: InboundMessage) -> str:
-        """El grupo configurado manda; si no hay, el del propio mensaje."""
-        if self.settings.game_group_id:
-            return self.settings.game_group_id
+        """Se juega donde se pregunta, siempre.
+
+        Antes había un grupo configurable con prioridad, y el resultado era
+        que el máster pedía una partida en un grupo y arrancaba en otro. No
+        hay caso en que eso sea lo que alguien quiere.
+
+        Por privado no hay grupo del que deducirlo, así que sólo se resuelve
+        para cancelar cuando hay una única partida viva: ahí no se elige
+        dónde hablar, se señala qué cortar.
+        """
         if message.scope == Scope.GROUP:
             return message.chat_id
-        # Con una sola partida viva, "cancelar" por privado es inequívoco.
         if len(self._games) == 1:
             return next(iter(self._games))
         return ""

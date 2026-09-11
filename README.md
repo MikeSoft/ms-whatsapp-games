@@ -254,7 +254,6 @@ Todas las variables están documentadas en `.env.example`. Las que más importan
 | Variable | Por defecto | Para qué |
 |---|---|---|
 | `MANAGER_NUMBER` | *(vacío)* | Único número que puede dar órdenes |
-| `GAME_GROUP_ID` | *(vacío)* | Grupo fijo. Si se deja vacío, se usa el grupo desde el que llega el comando |
 | `LLM_PROVIDER` | `deepseek` | `deepseek`, `openai` o `none` |
 | `LLM_API_KEY` | *(vacío)* | Sin clave, la narrativa es estática (el juego funciona igual) |
 | `MANAGE_GROUP_PERMISSIONS` | `true` | Silenciar el grupo de noche (requiere WAHA Plus) |

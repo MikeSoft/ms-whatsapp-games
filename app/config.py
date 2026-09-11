@@ -67,9 +67,6 @@ class Settings(BaseSettings):
     # -------------------------------------------------------------- control
     # Único número autorizado a lanzar y administrar partidas.
     manager_number: str = ""
-    # Grupo donde se juega. Si se deja vacío se usa el grupo desde el que el
-    # manager envía el comando.
-    game_group_id: str | None = None
     command_prefix: str = "!"
     # Silenciar el grupo (sólo administradores) requiere WAHA Plus.
     manage_group_permissions: bool = True
@@ -180,14 +177,6 @@ class Settings(BaseSettings):
     @classmethod
     def _normalise_manager(cls, value: str) -> str:
         return normalise_jid(value)
-
-    @field_validator("game_group_id", mode="after")
-    @classmethod
-    def _normalise_group(cls, value: str | None) -> str | None:
-        if not value:
-            return None
-        raw = value.strip()
-        return raw if "@" in raw else f"{raw}@g.us"
 
     @model_validator(mode="after")
     def _coherencia(self) -> Settings:

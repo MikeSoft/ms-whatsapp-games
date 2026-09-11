@@ -433,7 +433,7 @@ async def test_dos_partidas_completas_a_la_vez_con_checkpointer_real(tmpdir_path
 
 
 async def test_el_orquestador_lleva_dos_grupos_en_paralelo(monkeypatch):
-    """Sin GAME_GROUP_ID fijo, cada grupo tiene su propia partida."""
+    """Cada grupo tiene su propia partida: se juega donde se pide."""
     enviados: list[tuple[str, str]] = []
 
     async def fake_send_text(self, chat_id, text, *, reply_to=None, mentions=None):
@@ -452,7 +452,6 @@ async def test_el_orquestador_lleva_dos_grupos_en_paralelo(monkeypatch):
     monkeypatch.setattr(WahaClient, "set_admins_only", fake_admins_only)
 
     settings = make_settings(
-        game_group_id=None,
         recruit_seconds=1, night_action_seconds=1, witch_action_seconds=1,
         hunter_action_seconds=1, debate_seconds=1, vote_seconds=1,
         filler_interval_seconds=0,

@@ -291,3 +291,41 @@ async def test_apagar_el_servicio_cancela_las_partidas(orchestrator):
     await orch.shutdown()
     assert orch.snapshot()["partidas_activas"] == []
     assert locks and locks[-1] is False
+
+
+async def test_se_juega_en_el_grupo_desde_el_que_se_lanza(orchestrator):
+    """Pedir la partida en un grupo y verla arrancar en otro no se entiende.
+
+    Pasaba cuando un grupo configurado tenía prioridad sobre el del propio
+    mensaje: el máster escribía en un grupo y el bot contestaba en otro.
+    """
+    otro = "120363999999999999@g.us"
+    orch, outbox, _ = orchestrator()
+
+    await orch.handle(
+        inbound(MANAGER, "!juego hombreslobo", scope=Scope.GROUP, chat_id=otro,
+                name="Máster")
+    )
+
+    (partida,) = orch._games.values()
+    assert partida.group_id == otro
+    # Y la confirmación también va a donde se preguntó.
+    assert any(chat == otro for chat, _ in outbox)
+
+    await orch.shutdown()
+
+
+async def test_por_privado_no_se_adivina_el_grupo(orchestrator):
+    """Sin grupo del que deducirlo, se pide que lo mande donde se juega.
+
+    Antes existía un grupo configurable para esto, y era la causa de que una
+    partida pedida en un sitio arrancara en otro.
+    """
+    orch, outbox, _ = orchestrator()
+
+    await orch.handle(inbound(MANAGER, "!juego hombreslobo", scope=Scope.DIRECT))
+
+    assert orch.snapshot()["partidas_activas"] == []
+    assert any("se juega donde se pide" in text for _, text in outbox)
+
+    await orch.shutdown()

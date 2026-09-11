@@ -197,7 +197,6 @@ def fast_timers() -> Timers:
 def make_settings(**overrides) -> Settings:
     base = {
         "manager_number": MANAGER,
-        "game_group_id": GROUP_ID,
         "llm_provider": "none",
         "llm_api_key": None,
         "redis_url": UNREACHABLE_REDIS,

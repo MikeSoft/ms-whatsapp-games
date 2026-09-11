@@ -36,7 +36,7 @@ def test_la_instruccion_separa_las_cifras_del_tema():
 
 def test_sin_instruccion_se_usan_los_valores_por_defecto():
     b = parse_brief("", make_settings())
-    assert (b.questions, b.seconds, b.options) == (10, 7, 5)
+    assert (b.questions, b.seconds, b.options) == (10, 10, 5)
     assert b.topic_or_default == "cultura general"
 
 
@@ -142,12 +142,23 @@ def _rapido(**kwargs) -> Brief:
     return Brief(**base)
 
 
-def _mesa(monkeypatch, votos, *, settings: Settings | None = None, lock: bool = True):
+def _mesa(
+    monkeypatch,
+    votos,
+    *,
+    settings: Settings | None = None,
+    lock: bool = True,
+    con_nombre: bool = True,
+):
     """Monta el concurso con votantes automáticos.
 
     ``votos`` recibe (numero_de_pregunta, opciones) y devuelve una lista de
     ``(jid, opcion_elegida)``: así cada test decide quién acierta y quién no
     sin depender del orden en que se barajen las opciones.
+
+    Con ``con_nombre=False`` los votos llegan sin nombre, que es como los
+    manda WhatsApp de verdad: el evento ``poll.vote`` trae el identificador
+    del votante y nada más.
     """
     transport = FakeTransport()
     inbox = MemoryInbox()
@@ -172,7 +183,7 @@ def _mesa(monkeypatch, votos, *, settings: Settings | None = None, lock: bool = 
                 "s-kahoot",
                 inbound(
                     jid, "", scope=Scope.GROUP, poll_options=[eleccion],
-                    name={ANA: "Ana", BETO: "Beto"}.get(jid, jid),
+                    name={ANA: "Ana", BETO: "Beto"}.get(jid) if con_nombre else None,
                 ),
             )
 
@@ -199,10 +210,13 @@ async def test_una_tanda_completa_puntua_y_ordena(monkeypatch):
         {"nombre": "Beto", "aciertos": 0},
     ]
 
-    texto = transport.group_text()
-    assert "🏆 *CLASIFICACIÓN*" in texto
-    assert "Ana — 3/3" in texto
-    assert "Beto — 0/3" in texto
+    # La clasificación etiqueta a la gente. El cuerpo lleva el `@<id>` pelado
+    # a propósito: el nombre visible no lo manda el bot, lo pone el cliente de
+    # cada lector al cruzar ese id con el JID del array `mentions`.
+    clasificacion, menciones = transport.group_matching("CLASIFICACIÓN")[0]
+    assert "@573001 — 3/3" in clasificacion
+    assert "@573002 — 0/3" in clasificacion
+    assert menciones == [ANA, BETO]
     # Las respuestas correctas van en un único mensaje.
     respuestas = [m for m in transport.group_messages if "RESPUESTAS CORRECTAS" in m]
     assert len(respuestas) == 1
@@ -311,3 +325,127 @@ async def test_cancelar_reabre_el_grupo(monkeypatch):
 
     assert transport.locked is False
     assert "cancelado" in transport.group_text()
+
+
+async def test_sin_menciones_la_clasificacion_cae_al_nombre_resuelto(monkeypatch):
+    """Un voto de encuesta no trae nombre y el votante llega como @lid.
+
+    Con las menciones apagadas nadie pone el nombre por nosotros, así que hay
+    que ir a buscarlo: publicar el identificador en crudo deja una
+    clasificación en la que no se reconoce nadie.
+    """
+    ctx, transport, _ = _mesa(
+        monkeypatch,
+        lambda n, o: [(ANA, o[0])],
+        settings=make_settings(
+            llm_provider="deepseek", llm_api_key="sk-de-prueba", use_mentions=False
+        ),
+        con_nombre=False,
+    )
+    transport.contact_names[ANA] = "Paula Jara"
+
+    await KahootGame(ctx, brief=_rapido(), breather=0).run()
+
+    clasificacion, menciones = transport.group_matching("CLASIFICACIÓN")[0]
+    assert "Paula Jara" in clasificacion
+    assert "573001" not in clasificacion
+    assert menciones == []
+
+
+async def test_el_nombre_se_pide_una_sola_vez_por_persona(monkeypatch):
+    """Diez preguntas no son diez consultas por votante."""
+    ctx, transport, _ = _mesa(
+        monkeypatch,
+        lambda n, o: [(ANA, o[0])],
+        settings=make_settings(
+            llm_provider="deepseek", llm_api_key="sk-de-prueba", use_mentions=False
+        ),
+        con_nombre=False,
+    )
+    pedidos: list[str] = []
+    transport.contact_names[ANA] = "Paula Jara"
+    original = transport.contact_name
+
+    async def contando(jid: str):
+        pedidos.append(jid)
+        return await original(jid)
+
+    transport.contact_name = contando
+    await KahootGame(ctx, brief=_rapido(), breather=0).run()
+
+    assert pedidos == [ANA]
+
+
+def test_la_instruccion_aguanta_como_escribe_la_gente():
+    """Frases reales, no la forma canónica que uno imagina al escribir el parser.
+
+    Lo que importa es que las cifras salgan exactas y que el tema no arrastre
+    el andamiaje de la frase: "que duren", "de a", "y con" no son temas.
+    """
+    s = make_settings()
+    casos = [
+        (
+            "has 5 preguntas relacionadas a colombia que duren 8 segundos "
+            "y de a 3 respuestas",
+            ("colombia", 5, 8, 3),
+        ),
+        ("haz 8 preguntas de cultura general que duren 15 segundos",
+         ("cultura general", 8, 15, 5)),
+        ("quiero preguntas difíciles de anime, 12 preguntas, 6 segundos",
+         ("difíciles de anime", 12, 6, 5)),
+        ("10 preguntas sobre sexo con 5 respuestas por pregunta",
+         ("sexo", 10, 10, 5)),
+        ("hazme preguntas de historia del rock cada una de 12 segundos",
+         ("historia del rock", 10, 12, 5)),
+        ("preguntas de fútbol colombiano", ("fútbol colombiano", 10, 10, 5)),
+    ]
+    for frase, esperado in casos:
+        b = parse_brief(frase, s)
+        assert (b.topic_or_default, b.questions, b.seconds, b.options) == esperado, frase
+
+
+async def test_a_igualdad_de_aciertos_gana_quien_respondio_antes(monkeypatch):
+    """El desempate es por rapidez, no por el azar del diccionario.
+
+    Ana y Beto aciertan las tres, pero Beto vota siempre primero. La
+    clasificación tiene que ponerlo por encima.
+    """
+
+    def votos(numero, options):
+        correcta = PREGUNTAS[numero - 1]["opciones"][PREGUNTAS[numero - 1]["correcta"]]
+        # Beto entra antes al buzón en todas las preguntas.
+        return [(BETO, correcta), (ANA, correcta)]
+
+    ctx, _transport, _ = _mesa(monkeypatch, votos)
+    result = await KahootGame(ctx, brief=_rapido(), breather=0).run()
+
+    assert result.players == [
+        {"nombre": "Beto", "aciertos": 3},
+        {"nombre": "Ana", "aciertos": 3},
+    ]
+    assert result.winner == "Beto"
+
+
+async def test_responder_rapido_y_mal_no_da_ventaja(monkeypatch):
+    """Sólo cuenta la rapidez en lo que se acierta.
+
+    Si contaran también los fallos, quien vota lo primero que ve ganaría el
+    desempate a quien se lo piensa y acierta igual.
+    """
+
+    def votos(numero, options):
+        correcta = PREGUNTAS[numero - 1]["opciones"][PREGUNTAS[numero - 1]["correcta"]]
+        fallo = next(o for o in options if o != correcta)
+        # Beto dispara primero pero falla la primera; luego acierta.
+        if numero == 1:
+            return [(BETO, fallo), (ANA, correcta)]
+        return [(BETO, correcta), (ANA, correcta)]
+
+    ctx, _transport, _ = _mesa(monkeypatch, votos)
+    result = await KahootGame(ctx, brief=_rapido(), breather=0).run()
+
+    # Ana acierta 3 y Beto 2: no hay empate que desempatar.
+    assert result.players == [
+        {"nombre": "Ana", "aciertos": 3},
+        {"nombre": "Beto", "aciertos": 2},
+    ]

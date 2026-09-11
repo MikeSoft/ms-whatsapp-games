@@ -16,20 +16,32 @@ from dataclasses import dataclass
 
 from app.config import Settings
 
-#: Cada patrón captura un número seguido de la palabra que lo cualifica. Se
-#: aceptan las dos órdenes ("10 preguntas" y "preguntas: 10") porque la gente
-#: escribe de las dos formas.
+#: Cada patrón captura un número con la palabra que lo cualifica, y se traga
+#: además el andamiaje de alrededor ("que duren", "de a", "y con"). Si sólo
+#: se quitara la cifra, el tema quedaría con los restos de la frase: de
+#: "que duren 8 segundos" sobraría un "que duren" que no es ningún tema.
+_LEAD = r"(?:\b(?:y|e)\s+)?"
 _PATTERNS: dict[str, re.Pattern[str]] = {
     "questions": re.compile(
-        r"(?:(\d{1,3})\s*(?:preguntas?)|(?:preguntas?)\s*[:=]?\s*(\d{1,3}))", re.IGNORECASE
+        _LEAD
+        + r"(?:\b(?:has|haz|hazme|hagas|dame|genera|generame|quiero|pon|poneme)\s+)?"
+        r"(?:(\d{1,3})\s*preguntas?|preguntas?\s*[:=]?\s*(\d{1,3}))",
+        re.IGNORECASE,
     ),
     "seconds": re.compile(
-        r"(?:(\d{1,3})\s*(?:segundos?|segs?\b|s\b)|(?:segundos?)\s*[:=]?\s*(\d{1,3}))",
+        _LEAD
+        + r"(?:\b(?:que\s+)?(?:duren|dure|duran|dura|durando)\s+)?"
+        r"(?:\b(?:de|con|cada\s+una\s+de|cada\s+una)\s+)?"
+        r"(?:(\d{1,3})\s*(?:segundos?|segs?\b|s\b)"
+        r"|segundos?\s*[:=]?\s*(\d{1,3}))",
         re.IGNORECASE,
     ),
     "options": re.compile(
+        _LEAD
+        + r"(?:\b(?:de\s+a|con|de|cada\s+una\s+con)\s+)?"
         r"(?:(\d{1,2})\s*(?:opciones?|respuestas?|alternativas?)"
-        r"|(?:opciones?|respuestas?|alternativas?)\s*[:=]?\s*(\d{1,2}))",
+        r"|(?:opciones?|respuestas?|alternativas?)\s*[:=]?\s*(\d{1,2}))"
+        r"(?:\s+por\s+pregunta)?",
         re.IGNORECASE,
     ),
 }
@@ -58,6 +70,12 @@ _PREFIXES = (
     "temas",
     "con",
     "y",
+    "que",
+    "relacionadas",
+    "relacionado",
+    "relacionados",
+    "relacionada",
+    "a",
 )
 
 

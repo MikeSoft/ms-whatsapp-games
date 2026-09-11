@@ -48,6 +48,9 @@ class WahaClient:
         )
         self._send_lock = asyncio.Lock()
         self._last_send_at = 0.0
+        #: Nombres ya resueltos. Un nombre no cambia a media partida y a la
+        #: misma gente se le pregunta en cada ronda.
+        self._contact_names: dict[str, str | None] = {}
 
     def _default_headers(self, settings: Settings) -> dict[str, str]:
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
@@ -66,6 +69,7 @@ class WahaClient:
         path: str,
         *,
         json: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
         attempts: int | None = None,
     ) -> Any:
         """Ejecuta una petición con reintentos exponenciales.
@@ -78,7 +82,9 @@ class WahaClient:
 
         for attempt in range(1, attempts + 1):
             try:
-                response = await self._client.request(method, path, json=json)
+                response = await self._client.request(
+                    method, path, json=json, params=params
+                )
             except (httpx.TransportError, httpx.TimeoutException) as exc:
                 last_error = exc
                 log.warning("waha.transport_error", path=path, attempt=attempt, error=str(exc))
@@ -116,6 +122,7 @@ class WahaClient:
         path: str,
         *,
         json: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
     ) -> tuple[bool, Any]:
         """Variante tolerante para operaciones que no deben abortar la partida.
 
@@ -123,7 +130,7 @@ class WahaClient:
         Plus): devuelve ``(False, None)`` en lugar de propagar el error.
         """
         try:
-            return True, await self._request(method, path, json=json)
+            return True, await self._request(method, path, json=json, params=params)
         except WahaError as exc:
             log.warning("waha.optional_failed", path=path, error=str(exc))
             return False, None
@@ -256,6 +263,37 @@ class WahaClient:
                 hint="requiere WAHA Plus y que el bot sea admin del grupo",
             )
         return ok
+
+    async def contact_name(self, jid: str) -> str | None:
+        """Nombre con el que mostrar a alguien, o ``None`` si no se sabe.
+
+        Hace falta porque hay eventos que no traen nombre: un ``poll.vote``
+        llega con el identificador del votante y nada más, y en los grupos
+        nuevos ese identificador es un ``@lid``, que mostrado en crudo no
+        permite reconocer a nadie.
+
+        Se cachea en memoria: dentro de una partida se pregunta por la misma
+        gente en cada ronda y el nombre no cambia a media partida.
+        """
+        if not jid:
+            return None
+        if jid in self._contact_names:
+            return self._contact_names[jid]
+
+        ok, data = await self._try_request(
+            "GET",
+            "/api/contacts",
+            params={"contactId": jid, "session": self._settings.waha_session},
+        )
+        nombre: str | None = None
+        if ok and isinstance(data, dict):
+            for key in ("pushname", "name", "shortName"):
+                valor = data.get(key)
+                if isinstance(valor, str) and valor.strip():
+                    nombre = valor.strip()
+                    break
+        self._contact_names[jid] = nombre
+        return nombre
 
     async def delete_message(self, chat_id: str, message_id: str) -> bool:
         """Borra un mensaje ya enviado ("eliminar para todos").

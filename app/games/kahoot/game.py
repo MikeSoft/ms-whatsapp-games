@@ -15,13 +15,13 @@ from __future__ import annotations
 
 import asyncio
 import random
-import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 
 from app.games.base import Game, GameResult, GameSpec
 from app.games.kahoot.brief import Brief, parse_brief
 from app.games.kahoot.questions import Question, generate
+from app.games.mentions import GroupText
 from app.games.registry import register
 from app.logging_conf import get_logger
 from app.waha.models import InboundMessage
@@ -43,31 +43,43 @@ class Scoreboard:
 
     #: JID -> número de aciertos.
     hits: dict[str, int] = field(default_factory=lambda: defaultdict(int))
-    #: JID -> nombre con el que mostrarlo.
-    names: dict[str, str] = field(default_factory=dict)
-    #: JID -> segundos acumulados en responder, para desempatar.
-    elapsed: dict[str, float] = field(default_factory=lambda: defaultdict(float))
+    #: JID -> nombre con el que mostrarlo. Vale ``None`` mientras no se sepa:
+    #: un voto de encuesta no trae nombre y hay que ir a buscarlo.
+    names: dict[str, str | None] = field(default_factory=dict)
+    #: JID -> suma de posiciones de llegada en las preguntas que acertó.
+    #:
+    #: Es el desempate: quien acierta antes acumula menos. Se mide por el
+    #: orden en que llegan los votos y no por reloj, porque el sello de
+    #: tiempo de un voto lo pone el teléfono que vota y no hay forma de
+    #: fiarse de que todos vayan en hora.
+    speed: dict[str, int] = field(default_factory=lambda: defaultdict(int))
     answered: set[str] = field(default_factory=set)
 
-    def register(self, jid: str, name: str, *, correct: bool, took: float) -> None:
-        self.names.setdefault(jid, name)
+    def register(
+        self, jid: str, name: str | None, *, correct: bool, position: int
+    ) -> None:
+        if self.names.get(jid) is None:
+            self.names[jid] = name
         self.answered.add(jid)
-        self.elapsed[jid] += took
         if correct:
             self.hits[jid] += 1
+            self.speed[jid] += position
 
-    def ranking(self) -> list[tuple[str, int, float]]:
-        """(nombre, aciertos, tiempo) de más a menos acertadas.
+    def ranking(self) -> list[tuple[str, str, int, float]]:
+        """(jid, nombre, aciertos, rapidez) de más a menos acertadas.
 
-        A igualdad de aciertos gana quien tardó menos en contestar: sin
-        desempate, el orden de dos empatados dependería del azar del
-        diccionario y cambiaría entre partidas iguales.
+        A igualdad de aciertos gana quien los consiguió antes. Sólo cuentan
+        las preguntas acertadas: comparar también las falladas premiaría a
+        quien responde rápido cualquier cosa.
         """
         filas = [
-            (self.names.get(jid, jid.split("@", 1)[0]), self.hits.get(jid, 0), self.elapsed[jid])
+            (jid, self.display(jid), self.hits.get(jid, 0), self.speed[jid])
             for jid in self.answered
         ]
-        return sorted(filas, key=lambda fila: (-fila[1], fila[2], fila[0].casefold()))
+        return sorted(filas, key=lambda fila: (-fila[2], fila[3], fila[1].casefold()))
+
+    def display(self, jid: str) -> str:
+        return self.names.get(jid) or jid.split("@", 1)[0]
 
 
 @register
@@ -175,11 +187,10 @@ class KahootGame(Game):
                 )
                 continue
 
-            abierta = time.monotonic()
             votos = await self.ctx.inbox.collect(
                 self.ctx.session_id, timeout=brief.seconds, group=True
             )
-            respondieron = self._score(question, votos, poll_id=poll_id, opened=abierta)
+            respondieron = self._score(question, votos, poll_id=poll_id)
 
             if poll_id:
                 await self.ctx.transport.delete_group_message(poll_id)
@@ -214,7 +225,6 @@ class KahootGame(Game):
         votes: list[InboundMessage],
         *,
         poll_id: str,
-        opened: float,
     ) -> int:
         """Apunta las respuestas de una pregunta; devuelve cuántas hubo.
 
@@ -234,23 +244,56 @@ class KahootGame(Game):
                 continue
             ultimos[vote.sender_id] = vote
 
+        # El buzón conserva el orden de llegada, así que la posición dentro de
+        # los aciertos de esta pregunta es quién respondió antes. Se recorre
+        # en ese orden y se numera sólo a quien acierta.
+        posicion = 0
         for jid, vote in ultimos.items():
             elegidas = [o for o in vote.poll_options if o in question.options]
             # Una sola opción y que sea la buena: marcar varias no es acertar.
             acierto = len(elegidas) == 1 and elegidas[0] == question.answer
             self.board.register(
                 jid,
-                vote.display_name,
+                # El nombre tal cual venga en el evento, que en un voto de
+                # encuesta suele ser nada. Se resuelve antes de publicar.
+                vote.sender_name,
                 correct=acierto,
-                took=max(0.0, min(time.monotonic() - opened, 1e4)),
+                position=posicion,
             )
+            if acierto:
+                posicion += 1
         return len(ultimos)
 
     # ---------------------------------------------------------- resultados
+    async def _resolve_names(self) -> None:
+        """Cambia identificadores por nombres antes de publicar nada.
+
+        Un ``poll.vote`` llega sin nombre y, en los grupos nuevos, con el
+        votante identificado por ``@lid``. Sin resolverlo la clasificación es
+        una lista de números larguísimos en la que nadie se reconoce, que es
+        justo lo contrario de lo que tiene que hacer una clasificación.
+        """
+        for jid in self.board.answered:
+            if self.board.names.get(jid):
+                continue
+            try:
+                self.board.names[jid] = await self.ctx.transport.contact_name(jid)
+            except Exception as exc:  # noqa: BLE001
+                # Sin nombre se muestra el identificador: feo, pero el
+                # concurso no se cae por no saber cómo se llama alguien.
+                log.warning("kahoot.name_failed", jid=jid, error=str(exc))
+
     async def _publish_results(self) -> None:
+        await self._resolve_names()
         for bloque in self._answer_blocks():
             await self.ctx.transport.send_group(bloque)
-        await self.ctx.transport.send_group(self._ranking_text())
+        texto = self._texto()
+        await self.ctx.transport.send_group(
+            self._ranking_text(texto), mentions=texto.mentions
+        )
+
+    def _texto(self) -> GroupText:
+        return GroupText(enabled=self.ctx.settings.use_mentions)
 
     def _answer_blocks(self) -> list[str]:
         """Las respuestas correctas, en un mensaje (o los menos posibles)."""
@@ -265,7 +308,7 @@ class KahootGame(Game):
             bloques.append(cabecera + "\n\n" + "\n\n".join(trozo))
         return bloques
 
-    def _ranking_text(self) -> str:
+    def _ranking_text(self, texto: GroupText) -> str:
         filas = self.board.ranking()
         if not filas:
             return "🏁 *RESULTADOS*\n\nNo respondió nadie. Otra vez será."
@@ -273,30 +316,38 @@ class KahootGame(Game):
         total = len(self.questions)
         medallas = ("🥇", "🥈", "🥉")
         lineas = ["🏆 *CLASIFICACIÓN*", ""]
-        for puesto, (nombre, aciertos, _) in enumerate(filas):
+        for puesto, (jid, nombre, aciertos, _) in enumerate(filas):
             marca = medallas[puesto] if puesto < len(medallas) else f"{puesto + 1}."
-            lineas.append(f"{marca} {nombre} — {aciertos}/{total}")
+            lineas.append(f"{marca} {texto.tag(jid, nombre)} — {aciertos}/{total}")
 
-        mejor = filas[0][1]
-        campeones = [nombre for nombre, aciertos, _ in filas if aciertos == mejor]
+        mejor = filas[0][2]
+        campeones = [(jid, nombre) for jid, nombre, aciertos, _ in filas if aciertos == mejor]
         if mejor > 0:
+            etiquetas = [texto.tag(jid, nombre) for jid, nombre in campeones]
             cierre = (
-                f"\n👑 Gana *{campeones[0]}*."
-                if len(campeones) == 1
-                else "\n👑 Empate en lo más alto: " + ", ".join(f"*{c}*" for c in campeones) + "."
+                f"\n👑 Gana {etiquetas[0]}."
+                if len(etiquetas) == 1
+                else "\n👑 Empate en lo más alto: " + ", ".join(etiquetas) + "."
             )
             lineas.append(cierre)
         return "\n".join(lineas)
 
     def _result(self) -> GameResult:
         filas = self.board.ranking()
-        ganador = filas[0][0] if filas and filas[0][1] > 0 else None
+        ganador = filas[0][1] if filas and filas[0][2] > 0 else None
+        log.info(
+            "kahoot.finished",
+            session_id=self.ctx.session_id,
+            preguntas=len(self.questions),
+            participantes=len(filas),
+            ganador=ganador,
+        )
         return GameResult(
             status="finished",
             winner=ganador,
             rounds=len(self.questions),
             players=[
-                {"nombre": nombre, "aciertos": aciertos} for nombre, aciertos, _ in filas
+                {"nombre": nombre, "aciertos": aciertos} for _, nombre, aciertos, _ in filas
             ],
             summary=(
                 f"{len(self.questions)} preguntas, {len(filas)} participantes."

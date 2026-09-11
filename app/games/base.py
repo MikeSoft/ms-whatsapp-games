@@ -89,6 +89,15 @@ class Transport(Protocol):
         """Retira un mensaje del grupo. ``False`` si no se pudo."""
         ...
 
+    async def contact_name(self, jid: str) -> str | None:
+        """Nombre con el que mostrar a alguien, o ``None`` si no se sabe.
+
+        Hay eventos que no lo traen —un voto de encuesta llega sólo con el
+        identificador— y en los grupos nuevos ese identificador es un
+        ``@lid``, que en crudo no permite reconocer a nadie.
+        """
+        ...
+
     async def set_group_locked(self, locked: bool) -> bool:
         """Silencia (``True``) o reabre (``False``) el grupo."""
         ...

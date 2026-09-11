@@ -71,5 +71,8 @@ class WahaTransport:
             return False
         return await self._client.delete_message(self._group_id, message_id)
 
+    async def contact_name(self, jid: str) -> str | None:
+        return await self._client.contact_name(jid)
+
     async def set_group_locked(self, locked: bool) -> bool:
         return await self._client.set_admins_only(self._group_id, locked)

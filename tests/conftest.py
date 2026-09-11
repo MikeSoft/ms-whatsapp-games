@@ -81,6 +81,8 @@ class FakeTransport:
     poll_supported: bool = True
     #: Identificadores de los mensajes retirados del grupo, en orden.
     deleted: list[str] = field(default_factory=list)
+    #: Agenda que devuelve :meth:`contact_name`, como haría WAHA.
+    contact_names: dict[str, str] = field(default_factory=dict)
 
     on_group: Callable[[str], Awaitable[None]] | None = None
     on_direct: Callable[[str, str], Awaitable[None]] | None = None
@@ -110,6 +112,9 @@ class FakeTransport:
     async def delete_group_message(self, message_id: str) -> bool:
         self.deleted.append(message_id)
         return True
+
+    async def contact_name(self, jid: str) -> str | None:
+        return self.contact_names.get(jid)
 
     async def set_group_locked(self, locked: bool) -> bool:
         self.lock_history.append(locked)

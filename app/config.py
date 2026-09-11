@@ -139,10 +139,10 @@ class Settings(BaseSettings):
 
     # ------------------------------------------------------------- kahoot
     kahoot_questions: int = Field(default=10, ge=1)
-    # Siete segundos es lo que pidió el producto. Es poco: entre el envío, el
-    # rate limit de WhatsApp y el webhook de vuelta, quien lea despacio no
-    # llega. Se deja configurable por comando para poder subirlo.
-    kahoot_seconds_per_question: int = Field(default=7, ge=3)
+    # Diez segundos: entre el envío, el rate limit de WhatsApp y la vuelta
+    # del webhook, con menos no llega a votar quien lea despacio. Se ajusta
+    # por comando ("20 segundos").
+    kahoot_seconds_per_question: int = Field(default=10, ge=3)
     # Las encuestas de WhatsApp admiten hasta 12 opciones.
     kahoot_options: int = Field(default=5, ge=2, le=12)
     # Topes de lo que puede pedir el máster en el comando.

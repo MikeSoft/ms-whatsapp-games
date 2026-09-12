@@ -99,6 +99,7 @@ tocan sólo esos dos ficheros.
 | `app/games/mentions.py` | Compone mensajes etiquetando contactos | — |
 | `app/games/recruit.py` | Reclutamiento en lenguaje natural (reutilizable) | Mejorar la detección de inscripciones |
 | `app/games/werewolf/` | [El Hombre Lobo](hombreslobo.md): grafo de LangGraph, roles, narrador | — |
+| `app/games/werewolf/nodes/` | Un módulo por fase: `recruitment`, `night`, `day`, `ending`, y la `base` común | El comportamiento de una fase |
 | `app/games/kahoot/` | [El concurso](kahoot.md): instrucción, generación, aritmética | — |
 | `app/games/<juego>/` | **Tu juego** | Aquí escribes |
 

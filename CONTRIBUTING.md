@@ -8,10 +8,11 @@ any general habit.
 ## Environment
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements-dev.txt
-cp .env.example .env
+make setup      # venv, dependencies and a .env to edit
 ```
+
+By hand, if you prefer: `python3 -m venv .venv`,
+`.venv/bin/pip install -r requirements-dev.txt`, `cp .env.example .env`.
 
 Python 3.11 or later. Never commit a `.env`: `.gitignore` already covers it,
 but check before `git add -A`.
@@ -19,8 +20,7 @@ but check before `git add -A`.
 ## Before opening a pull request
 
 ```bash
-.venv/bin/ruff check app tests
-.venv/bin/python -m pytest
+make check      # ruff + the whole suite
 ```
 
 The suite runs in parallel (`-n auto` in `pytest.ini`) and takes about twenty
@@ -34,9 +34,14 @@ red; do not skip it and do not delete it.
 ## Style
 
 - 95-column lines, `ruff` with the configuration in `pyproject.toml`.
-- **Identifiers and code in English, comments in Spanish.** Player-facing
-  text is not written in the code at all: it lives in the catalogues, in
-  both languages (see *Where each thing goes*).
+- **Comments and docstrings in Spanish. Code in English, with one exception:
+  the game's own vocabulary.** The phases and roles of Werewolf keep their
+  Spanish names (`noche_bruja`, `veredicto`, `Role.LOBO`) because that is
+  what the graph, the docs and the players call them; renaming them would
+  split the vocabulary in two. Inside those modules a local may follow suit
+  (`vivos`, `recuento`). Everything outside `app/games/` is English.
+- Player-facing text is not written in the code at all: it lives in the
+  catalogues, in both languages (see *Where each thing goes*).
 - Broad `except Exception` is legitimate **only at the edges** (WAHA, LLM,
   Redis, database) and always with `# noqa: BLE001` and a comment saying what
   degrades. Not in game logic.

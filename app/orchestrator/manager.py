@@ -173,10 +173,10 @@ class Orchestrator:
             await self._reply(message, self.t("catalogue.empty"))
             return
         prefix = self.settings.command_prefix
-        lineas = [self.t("catalogue.header"), ""]
+        lines = [self.t("catalogue.header"), ""]
         for spec in specs:
-            lineas.append(f"*{spec.title_in(self.lang)}* — {spec.tagline_in(self.lang)}")
-            lineas.append(
+            lines.append(f"*{spec.title_in(self.lang)}* — {spec.tagline_in(self.lang)}")
+            lines.append(
                 "  "
                 + self.t(
                     "players.range",
@@ -184,9 +184,9 @@ class Orchestrator:
                     maximum=spec.max_players,
                 )
             )
-            lineas.append(self.t("catalogue.launch", prefix=prefix, key=spec.key))
-            lineas.append("")
-        await self._reply(message, "\n".join(lineas).strip())
+            lines.append(self.t("catalogue.launch", prefix=prefix, key=spec.key))
+            lines.append("")
+        await self._reply(message, "\n".join(lines).strip())
 
     async def _cmd_status(self, command: Command, message: InboundMessage) -> None:
         if not self._games:
@@ -195,10 +195,10 @@ class Orchestrator:
                 self.t("status.idle", prefix=self.settings.command_prefix),
             )
             return
-        lineas = [self.t("status.header"), ""]
+        lines = [self.t("status.header"), ""]
         for game in self._games.values():
             spec = type(game.game).spec
-            lineas.append(
+            lines.append(
                 self.t(
                     "status.row",
                     title=spec.title_in(self.lang),
@@ -207,7 +207,7 @@ class Orchestrator:
                     seconds=int(game.elapsed),
                 )
             )
-        await self._reply(message, "\n".join(lineas))
+        await self._reply(message, "\n".join(lines))
 
     async def _cmd_cancel(self, command: Command, message: InboundMessage) -> None:
         group_id = self._resolve_group(message)
@@ -218,8 +218,8 @@ class Orchestrator:
             await self._reply(message, self.t("cancel.nothing"))
 
     async def _cmd_start(self, command: Command, message: InboundMessage) -> None:
-        nombre = command.argument
-        if not nombre:
+        name = command.argument
+        if not name:
             await self._reply(
                 message,
                 self.t("start.which", prefix=self.settings.command_prefix),
@@ -230,9 +230,9 @@ class Orchestrator:
         # línea: ``#juego kahoot preguntas de cine`` es un juego y una orden.
         game_cls, instruccion = registry.resolve_prefix(command.args)
         if game_cls is None:
-            disponibles = ", ".join(spec.key for spec in registry.specs())
+            available = ", ".join(spec.key for spec in registry.specs())
             await self._reply(
-                message, self.t("start.unknown", name=nombre, available=disponibles)
+                message, self.t("start.unknown", name=name, available=available)
             )
             return
 

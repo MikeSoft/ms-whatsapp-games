@@ -11,20 +11,20 @@
 ## Entorno
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements-dev.txt
-cp .env.example .env
+make setup
 ```
 
-Python 3.11 o superior.
+Python 3.11 o superior. `make` a secas lista todos los atajos:
 
 ```bash
-.venv/bin/python -m pytest
-.venv/bin/ruff check app tests
-.venv/bin/uvicorn app.main:app --reload
+make check      # ruff + la suite entera: lo que pide un pull request
+make test       # sólo la suite, en paralelo (~20 s)
+make run        # el servicio en local, con recarga
+make up         # el stack entero en docker, esperando a que esté sano
+make logs       # sigue el log del servicio
 ```
 
-Las dos primeras tienen que pasar en limpio antes de abrir un pull request.
+`make check` es lo que tiene que pasar en limpio antes de un pull request.
 
 ### Si `python3 -m venv` no funciona
 

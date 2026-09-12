@@ -341,6 +341,11 @@ each kind of change belongs, and the two checks that must pass:
 .venv/bin/python -m pytest
 ```
 
+```bash
+make setup      # venv, dependencies and a .env to edit
+make check      # ruff + the whole suite, about twenty seconds
+```
+
 Adding a game is a well-trodden path: [`docs/new-game.md`](docs/new-game.md)
 walks through it end to end.
 

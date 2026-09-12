@@ -130,8 +130,8 @@ class WahaClient:
             if attempt < attempts:
                 base = self._settings.waha_retry_backoff
                 if base > 0:
-                    espera = min(8.0, base * 2 ** (attempt - 1))
-                    await asyncio.sleep(espera + random.uniform(0, 0.3))
+                    delay = min(8.0, base * 2 ** (attempt - 1))
+                    await asyncio.sleep(delay + random.uniform(0, 0.3))
 
         raise WahaError(f"WAHA {method} {path} falló: {last_error}")
 
@@ -309,17 +309,17 @@ class WahaClient:
 
         datos = await self.session_status()
         me = datos.get("me") if isinstance(datos, dict) else None
-        formas = set()
+        forms = set()
         if isinstance(me, dict):
             for clave in ("id", "lid"):
                 local = _local_part(me.get(clave))
                 if local:
-                    formas.add(local)
+                    forms.add(local)
         # Sin respuesta de WAHA no se cachea: puede ser un fallo pasajero y
         # cachear un conjunto vacío dejaría el bot sin identidad toda la vida
         # del proceso.
-        if formas:
-            self._own_jids = frozenset(formas)
+        if forms:
+            self._own_jids = frozenset(forms)
             return self._own_jids
         return frozenset()
 

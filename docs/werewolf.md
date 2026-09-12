@@ -118,6 +118,12 @@ cycle breaks when `evaluar` finds a win condition.
 | `veredicto` | Lynches the most voted and reveals their role |
 | `final` | Narrates the ending and reveals every role |
 
+The nodes live one phase per module under `app/games/werewolf/nodes/`:
+`recruitment.py` (the first two), `night.py` (the four night ones),
+`day.py` (dawn, trial, vote) and `ending.py` (evaluation, verdict, close).
+`base.py` holds what they all share — timers, sending, the waiting-room
+atmosphere — and `WerewolfNodes` is just the composition of the four.
+
 The witch has her own node because she **needs to know who the wolves
 attacked**: her window opens after theirs, not in parallel.
 

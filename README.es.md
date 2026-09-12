@@ -341,6 +341,11 @@ estilo, dónde va cada cambio— y las dos comprobaciones que tienen que pasar:
 .venv/bin/python -m pytest
 ```
 
+```bash
+make setup      # venv, dependencias y un .env que editar
+make check      # ruff + la suite entera, unos veinte segundos
+```
+
 Añadir un juego es un camino trillado:
 [`docs/es/juego-nuevo.md`](docs/es/juego-nuevo.md) lo cuenta de punta a punta.
 

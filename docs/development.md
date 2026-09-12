@@ -11,20 +11,20 @@
 ## Environment
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements-dev.txt
-cp .env.example .env
+make setup
 ```
 
-Python 3.11 or later.
+Python 3.11 or later. `make` on its own lists every shortcut:
 
 ```bash
-.venv/bin/python -m pytest
-.venv/bin/ruff check app tests
-.venv/bin/uvicorn app.main:app --reload
+make check      # ruff + the whole suite: what a pull request needs
+make test       # the suite alone, in parallel (~20 s)
+make run        # the service locally, with reload
+make up         # the whole stack in docker, waiting until healthy
+make logs       # follow the service log
 ```
 
-The first two must pass clean before opening a pull request.
+`make check` is what a pull request needs to pass clean.
 
 ### If `python3 -m venv` does not work
 

@@ -99,6 +99,7 @@ route or a field, those two files are the only ones touched.
 | `app/games/mentions.py` | Composes messages that tag contacts | — |
 | `app/games/recruit.py` | Natural-language sign-ups (reusable) | Improving sign-up detection |
 | `app/games/werewolf/` | [Werewolf](werewolf.md): LangGraph graph, roles, narrator | — |
+| `app/games/werewolf/nodes/` | One module per phase: `recruitment`, `night`, `day`, `ending`, plus the shared `base` | The behaviour of a phase |
 | `app/games/kahoot/` | [The quiz](quiz.md): instruction, generation, arithmetic | — |
 | `app/games/<game>/` | **Your game** | This is where you write |
 

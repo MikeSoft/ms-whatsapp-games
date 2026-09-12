@@ -8,10 +8,11 @@ cualquier costumbre general.
 ## Entorno
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements-dev.txt
-cp .env.example .env
+make setup      # venv + dependencias + .env
 ```
+
+O a mano, si lo prefieres: `python3 -m venv .venv`,
+`.venv/bin/pip install -r requirements-dev.txt`, `cp .env.example .env`.
 
 Python 3.11 o superior. Nunca commitees un `.env`: `.gitignore` ya lo cubre,
 pero revísalo antes de `git add -A`.
@@ -19,8 +20,7 @@ pero revísalo antes de `git add -A`.
 ## Antes de abrir un pull request
 
 ```bash
-.venv/bin/ruff check app tests
-.venv/bin/python -m pytest
+make check      # ruff + la suite entera
 ```
 
 La suite corre en paralelo (`-n auto` en `pytest.ini`) y tarda unos veinte
@@ -34,9 +34,15 @@ explica en el PR por qué queda rojo; no lo saltes ni lo borres.
 ## Estilo
 
 - Línea de 95 columnas, `ruff` con la configuración de `pyproject.toml`.
-- **Identificadores y código en inglés, comentarios en español.** Los textos
-  que lee un jugador no se escriben en el código: viven en los catálogos, en
-  los dos idiomas (ver *Dónde va cada cosa*).
+- **Comentarios y docstrings en español. Código en inglés, con una excepción:
+  el vocabulario del juego.** Las fases y los roles de El Hombre Lobo
+  conservan su nombre español (`noche_bruja`, `veredicto`, `Role.LOBO`)
+  porque así los llaman el grafo, la documentación y los jugadores;
+  traducirlos partiría el vocabulario en dos. Dentro de esos módulos una
+  variable local puede seguir la misma lengua (`vivos`, `recuento`). Fuera
+  de `app/games/`, todo en inglés.
+- Los textos que lee un jugador no se escriben en el código: viven en los
+  catálogos, en los dos idiomas (ver *Dónde va cada cosa*).
 - Los `except Exception` amplios son legítimos **sólo en los bordes** (WAHA,
   LLM, Redis, base de datos) y siempre con `# noqa: BLE001` y un comentario que
   diga qué se degrada. En la lógica del juego, no.

@@ -112,6 +112,13 @@ rompe cuando `evaluar` encuentra una condición de victoria.
 | `veredicto` | Lincha al más votado y revela su rol |
 | `final` | Narra el desenlace y revela todos los roles |
 
+Los nodos viven una fase por módulo en `app/games/werewolf/nodes/`:
+`recruitment.py` (los dos primeros), `night.py` (los cuatro de la noche),
+`day.py` (amanecer, juicio y votación) y `ending.py` (evaluación, veredicto
+y cierre). `base.py` guarda lo que todos comparten —tiempos, envíos,
+ambientación de la espera— y `WerewolfNodes` es sólo la composición de las
+cuatro fases.
+
 La bruja tiene su propio nodo porque **necesita saber a quién atacaron los
 lobos**: su ventana se abre después de la de ellos, no en paralelo.
 

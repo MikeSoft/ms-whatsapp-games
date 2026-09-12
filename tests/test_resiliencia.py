@@ -13,7 +13,6 @@ import pytest
 from app.core.inbox import MemoryInbox, RedisInbox
 from app.core.llm import LLMClient
 from app.games.transport import WahaTransport
-from app.games.werewolf import nodes as nodes_mod
 from app.games.werewolf.game import WerewolfGame
 from app.games.werewolf.nodes import (
     DM_BUDGET_MAX,
@@ -22,6 +21,7 @@ from app.games.werewolf.nodes import (
     WerewolfNodes,
     dm_budget,
 )
+from app.games.werewolf.nodes import base as nodes_base
 from app.orchestrator.manager import Orchestrator
 from app.waha.client import WahaClient
 from app.waha.models import Scope, SentMessage
@@ -117,9 +117,11 @@ async def test_un_envio_masivo_lento_se_corta_por_presupuesto(monkeypatch):
     verdad este test dormía cuarenta, un tercio de la suite entera, y lo que
     comprueba —que el corte llega— no depende de la escala.
     """
-    monkeypatch.setattr(nodes_mod, "DM_BUDGET_PER_MESSAGE", 0.1)
-    monkeypatch.setattr(nodes_mod, "DM_BUDGET_MIN", 0.5)
-    monkeypatch.setattr(nodes_mod, "DM_BUDGET_MAX", 1.0)
+    # Se parchea donde `dm_budget` los lee, que es el módulo de la base de
+    # los nodos; el paquete sólo los reexporta.
+    monkeypatch.setattr(nodes_base, "DM_BUDGET_PER_MESSAGE", 0.1)
+    monkeypatch.setattr(nodes_base, "DM_BUDGET_MIN", 0.5)
+    monkeypatch.setattr(nodes_base, "DM_BUDGET_MAX", 1.0)
 
     transport = SlowSerialTransport(delay=0.25)
     ctx, _inbox, _script = _mesa(2, transport)
@@ -127,7 +129,7 @@ async def test_un_envio_masivo_lento_se_corta_por_presupuesto(monkeypatch):
 
     pares = [(make_jid(i), f"privado {i}") for i in range(1, 21)]
     presupuesto = dm_budget(len(pares))
-    assert presupuesto <= nodes_mod.DM_BUDGET_MAX
+    assert presupuesto <= nodes_base.DM_BUDGET_MAX
 
     loop = asyncio.get_running_loop()
     inicio = loop.time()

@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 from app.config import Settings
 from app.core.inbox import Inbox
 from app.core.llm import LLMClient
+from app.i18n import DEFAULT_LANGUAGE, Language
 
 
 class GameSpec(BaseModel):
@@ -36,6 +37,10 @@ class GameSpec(BaseModel):
     min_players: int = 2
     max_players: int = 30
     how_to: str = ""
+    #: Título, lema y explicación en otros idiomas, indexados por el código
+    #: del idioma. Los campos de arriba son los del idioma por defecto; un
+    #: juego que no traduzca su ficha se anuncia en español y se juega igual.
+    i18n: dict[str, dict[str, str]] = Field(default_factory=dict)
     #: El juego no tiene sentido sin modelo (por ejemplo, si genera su propio
     #: contenido). Recibe el LLM aunque el máster no escriba ``ia``, que en
     #: los demás juegos es lo que decide gastar API.
@@ -43,6 +48,20 @@ class GameSpec(BaseModel):
 
     def rango_jugadores(self) -> str:
         return f"{self.min_players}-{self.max_players} jugadores"
+
+    def _localised(self, field: str, language: Language) -> str:
+        if language == DEFAULT_LANGUAGE:
+            return getattr(self, field)
+        return self.i18n.get(language, {}).get(field) or getattr(self, field)
+
+    def title_in(self, language: Language = DEFAULT_LANGUAGE) -> str:
+        return self._localised("title", language)
+
+    def tagline_in(self, language: Language = DEFAULT_LANGUAGE) -> str:
+        return self._localised("tagline", language)
+
+    def how_to_in(self, language: Language = DEFAULT_LANGUAGE) -> str:
+        return self._localised("how_to", language)
 
 
 class GameResult(BaseModel):

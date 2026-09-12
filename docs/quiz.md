@@ -16,8 +16,9 @@ WhatsApp poll.
 - **Players**: anyone in the group who taps the poll
 
 > [!NOTE]
-> The bot writes in Spanish — the transcript below is what players actually
-> see.
+> The transcript below is a game in Spanish, which is the default. With
+> `GAME_LANGUAGE=en` the announcements, the leaderboard and the questions the
+> model writes all come out in English.
 
 ---
 
@@ -236,6 +237,7 @@ does not parse: the whole batch is lost, not the last question.
 | `KAHOOT_MAX_SECONDS` | `120` | Cap on the window |
 | `KAHOOT_LOCK_GROUP` | `true` | Mute the group while playing |
 | `KAHOOT_HARDEN` | `true` | Second review pass (another model call) |
+| `GAME_LANGUAGE` | `es` | Language the questions are written in: `es` or `en` |
 
 ---
 

@@ -69,6 +69,12 @@ class Settings(BaseSettings):
     # Deshabilita el envío real (útil en desarrollo: sólo escribe en el log).
     waha_dry_run: bool = False
 
+    # ------------------------------------------------------------- idioma
+    # En qué idioma se juega: lo que sale al grupo, los privados y lo que se le
+    # pide al modelo. Lo que la gente escribe se entiende en los dos idiomas
+    # sea cual sea este valor.
+    game_language: Literal["es", "en"] = "es"
+
     # -------------------------------------------------------------- control
     # Números autorizados a lanzar y administrar partidas. Admite varios,
     # separados por comas o puntos y coma. Se guarda normalizado.

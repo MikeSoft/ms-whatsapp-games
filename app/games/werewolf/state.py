@@ -15,6 +15,8 @@ from typing import Annotated, Any, Literal, TypedDict
 
 from app.games.mentions import GroupText
 from app.games.werewolf.roles import Role, info
+from app.games.werewolf.texts import TEXTS
+from app.i18n import DEFAULT_LANGUAGE, Language, Texts
 
 Phase = Literal[
     "reclutamiento",
@@ -200,7 +202,7 @@ def kill(
     return updated, victim
 
 
-def role_title(player: Player) -> str:
+def role_title(player: Player, language: Language = DEFAULT_LANGUAGE) -> str:
     """Rol para mostrar. Tolerante: es una función de presentación.
 
     Un rol desconocido (estado corrupto, checkpoint de una versión anterior)
@@ -208,17 +210,23 @@ def role_title(player: Player) -> str:
     """
     raw = player.get("role") or Role.ALDEANO
     try:
-        details = info(raw)
+        details = info(raw, language)
     except ValueError:
         return f"❓ {raw}"
     return f"{details.emoji} {details.title}"
 
 
-def public_summary(players: list[Player], texto: GroupText | None = None) -> str:
+def public_summary(
+    players: list[Player],
+    texto: GroupText | None = None,
+    language: Language = DEFAULT_LANGUAGE,
+) -> str:
     """Revelación final de todos los roles, para cerrar la partida."""
+    t = Texts(TEXTS, language)
     lines = []
     for player in sorted(players, key=lambda p: p.get("number", 0)):
-        estado = "sobrevivió" if player.get("alive", True) else "murió"
+        vivo = player.get("alive", True)
+        estado = t("final.survived") if vivo else t("final.died")
         etiqueta = tagged_label(player, texto) if texto is not None else label(player)
-        lines.append(f"{etiqueta} — {role_title(player)} ({estado})")
+        lines.append(f"{etiqueta} — {role_title(player, language)} ({estado})")
     return "\n".join(lines)

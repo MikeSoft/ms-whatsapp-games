@@ -22,8 +22,10 @@ from app.core.llm import LLMClient
 from app.games.base import Game, GameResult, GameSpec
 from app.games.kahoot.brief import Brief, parse_brief
 from app.games.kahoot.questions import Question, generate
+from app.games.kahoot.texts import TEXTS
 from app.games.mentions import GroupText
 from app.games.registry import register
+from app.i18n import Texts
 from app.logging_conf import get_logger
 from app.waha.models import InboundMessage
 
@@ -103,6 +105,18 @@ class KahootGame(Game):
             "responder; al cerrarse, la encuesta se retira. Al final se "
             "publican las respuestas correctas y la clasificación."
         ),
+        i18n={
+            "en": {
+                "title": "Quiz",
+                "tagline": "Questions against the clock: most right answers wins.",
+                "how_to": (
+                    "The master asks for a topic and the model writes the "
+                    "questions. They are published one at a time as a poll, with "
+                    "a few seconds to answer; once closed, the poll is withdrawn. "
+                    "At the end the correct answers and the leaderboard go out."
+                ),
+            }
+        },
     )
 
     def __init__(
@@ -120,6 +134,7 @@ class KahootGame(Game):
         self._brief = brief
         self._breather = breather
         self.board = Scoreboard()
+        self.t = Texts(TEXTS, ctx.settings.game_language)
         #: Disponible tras :meth:`run` para inspección y para los tests.
         self.questions: list[Question] = []
 
@@ -130,17 +145,11 @@ class KahootGame(Game):
 
         self.questions, generadas = await generate(self._llm(), brief, rng=self.rng)
         if not self.questions:
-            await self.ctx.transport.send_group(
-                "😕 No he podido preparar las preguntas. Volvé a intentarlo, o "
-                "pedime otro tema."
-            )
+            await self.ctx.transport.send_group(self.t("no_questions"))
             return GameResult(status="aborted", error="sin preguntas utilizables")
 
         if not generadas:
-            await self.ctx.transport.send_group(
-                "⚠️ No pude generar preguntas del tema pedido, así que van "
-                "preguntas de cultura general del repertorio de siempre."
-            )
+            await self.ctx.transport.send_group(self.t("fallback_bank"))
 
         locked = await self._lock(brief)
         try:
@@ -187,10 +196,13 @@ class KahootGame(Game):
     # ------------------------------------------------------------- fases
     async def _announce(self, brief: Brief) -> None:
         await self.ctx.transport.send_group(
-            "🧠 *CONCURSO DE PREGUNTAS*\n\n"
-            f"Tema: *{brief.topic_or_default}*\n"
-            f"{brief.questions} preguntas · {brief.options} opciones · "
-            f"{brief.seconds:g} segundos cada una"
+            self.t(
+                "announce",
+                topic=brief.topic or self.t("topic.default"),
+                questions=brief.questions,
+                options=brief.options,
+                seconds=brief.seconds,
+            )
         )
 
     async def _lock(self, brief: Brief) -> bool:
@@ -211,7 +223,7 @@ class KahootGame(Game):
             if poll_id is None:
                 log.warning("kahoot.poll_failed", numero=numero)
                 await self.ctx.transport.send_group(
-                    f"⚠️ No pude publicar la pregunta {numero}. Sigo con la siguiente."
+                    self.t("poll_failed", number=numero)
                 )
                 continue
 
@@ -243,11 +255,7 @@ class KahootGame(Game):
                 # preguntas en el vacío.
                 locked = False
                 await self.ctx.transport.set_group_locked(False)
-                await self.ctx.transport.send_group(
-                    "🔊 Nadie pudo responder la primera pregunta, así que "
-                    "reabro el chat por si el silencio lo estaba impidiendo. "
-                    "Seguimos."
-                )
+                await self.ctx.transport.send_group(self.t("unlocked_after_silence"))
                 log.warning("kahoot.unlocked_after_silence", session_id=self.ctx.session_id)
 
             if numero < total and self._breather > 0:
@@ -342,30 +350,40 @@ class KahootGame(Game):
         bloques: list[str] = []
         for inicio in range(0, len(lineas), SUMMARY_MAX_QUESTIONS):
             trozo = lineas[inicio : inicio + SUMMARY_MAX_QUESTIONS]
-            cabecera = "📖 *RESPUESTAS CORRECTAS*" if inicio == 0 else "📖 *(sigue)*"
+            cabecera = self.t(
+                "answers.header" if inicio == 0 else "answers.continued"
+            )
             bloques.append(cabecera + "\n\n" + "\n\n".join(trozo))
         return bloques
 
     def _ranking_text(self, texto: GroupText) -> str:
         filas = self.board.ranking()
         if not filas:
-            return "🏁 *RESULTADOS*\n\nNo respondió nadie. Otra vez será."
+            return self.t("ranking.empty")
 
         total = len(self.questions)
         medallas = ("🥇", "🥈", "🥉")
-        lineas = ["🏆 *CLASIFICACIÓN*", ""]
+        lineas = [self.t("ranking.header"), ""]
         for puesto, (jid, nombre, aciertos, _) in enumerate(filas):
             marca = medallas[puesto] if puesto < len(medallas) else f"{puesto + 1}."
-            lineas.append(f"{marca} {texto.tag(jid, nombre)} — {aciertos}/{total}")
+            lineas.append(
+                self.t(
+                    "ranking.row",
+                    mark=marca,
+                    name=texto.tag(jid, nombre),
+                    hits=aciertos,
+                    total=total,
+                )
+            )
 
         mejor = filas[0][2]
         campeones = [(jid, nombre) for jid, nombre, aciertos, _ in filas if aciertos == mejor]
         if mejor > 0:
             etiquetas = [texto.tag(jid, nombre) for jid, nombre in campeones]
             cierre = (
-                f"\n👑 Gana {etiquetas[0]}."
+                self.t("ranking.winner", name=etiquetas[0])
                 if len(etiquetas) == 1
-                else "\n👑 Empate en lo más alto: " + ", ".join(etiquetas) + "."
+                else self.t("ranking.tie", names=", ".join(etiquetas))
             )
             lineas.append(cierre)
         return "\n".join(lineas)
@@ -388,13 +406,15 @@ class KahootGame(Game):
                 {"nombre": nombre, "aciertos": aciertos} for _, nombre, aciertos, _ in filas
             ],
             summary=(
-                f"{len(self.questions)} preguntas, {len(filas)} participantes."
-                + (f" Ganó {ganador}." if ganador else " Sin aciertos.")
+                self.t("summary", questions=len(self.questions), players=len(filas))
+                + (
+                    self.t("summary.winner", name=ganador)
+                    if ganador
+                    else self.t("summary.no_hits")
+                )
             ),
         )
 
     async def on_cancel(self) -> None:
         await self.ctx.transport.set_group_locked(False)
-        await self.ctx.transport.send_group(
-            "🛑 *Concurso cancelado por el máster.* El chat queda abierto."
-        )
+        await self.ctx.transport.send_group(self.t("cancelled"))

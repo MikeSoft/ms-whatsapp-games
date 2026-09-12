@@ -24,25 +24,27 @@ who wins or whose vote counts. Everything plays fine with `LLM_PROVIDER=none`.
 | [🧠 Quiz](docs/quiz.md) | `#juego kahoot <topic>` | A race-the-clock quiz. The model writes the questions and it is played through WhatsApp polls |
 
 > [!NOTE]
-> The games are played **in Spanish** — that is what the bot writes in the
-> group, and the commands are Spanish words. The code, its identifiers and this
-> documentation are in English.
+> Games ship in Spanish and play in English too: set `GAME_LANGUAGE=en` and
+> the group messages, the private chats and the model's narration all switch
+> over. See [Playing in English](#playing-in-english).
+
+With `GAME_LANGUAGE=en`:
 
 ```
-Master  ›  #juego hombreslobo
+Master  ›  #game werewolf
 
 Bot     ›  🌫️ A thick fog rolls down from the mountain…
            🐺 WEREWOLF — sign-ups are open.
-           Type YO in the next 30 seconds to join.
+           Type ME in the next 30 seconds to join the game.
 
-Ana     ›  Yo
-Beto    ›  me apunto
+Ana     ›  me
+Beto    ›  I'm in
 
 Bot     ›  🎭 6 players are in
            🔇 The group goes quiet. Check your private chat.
 
-(DM to Beto)  🐺 You are a Werewolf. You hunt tonight…
-(DM to Ana)   🔮 You are the Seer. Each night you may ask me…
+(DM to Beto)  🐺 Your role is Werewolf. Each night I will ask you…
+(DM to Ana)   🔮 Your role is Seer. Each night you may ask me…
 ```
 
 ---
@@ -52,6 +54,7 @@ Bot     ›  🎭 6 players are in
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
 - [Using an existing WAHA](#using-an-existing-waha)
+- [Playing in English](#playing-in-english)
 - [Commands](#commands)
 - [How it fits together](#how-it-fits-together)
 - [Configuration](#configuration)
@@ -164,6 +167,32 @@ Three things that cost an afternoon to find out:
 
 ---
 
+## Playing in English
+
+One setting:
+
+```env
+GAME_LANGUAGE=en
+```
+
+It changes **what goes out**: every group message and private chat, the role
+briefings, the quiz questions and the narrator's prompt — the model is told to
+write in English, so the scenes come out in English too.
+
+It does **not** change what comes in. The parsers accept both languages at all
+times, whichever language the table is playing in: `me` and `yo` both join,
+`heal` and `curar` both spend the potion, `pass` and `paso` both abstain. In a
+mixed group nobody is left out for answering in the other language.
+
+Commands are not translated either — they already accept English aliases, so
+`#game werewolf`, `#games`, `#status` and `#cancel` work in either setting.
+
+A missing translation falls back to Spanish rather than breaking a game; the
+test suite checks that both catalogues have the same keys, so it should never
+come up.
+
+---
+
 ## Commands
 
 Only the numbers in `MANAGER_NUMBER` are obeyed.
@@ -222,6 +251,7 @@ game's document. The cross-cutting ones:
 |---|---|---|
 | `MANAGER_NUMBER` | *(empty)* | Numbers allowed to give orders, comma separated |
 | `COMMAND_PREFIX` | `#` | Command prefix |
+| `GAME_LANGUAGE` | `es` | Language the games are played in: `es` or `en` |
 | `WAHA_BASE_URL` | `http://waha:3000` | Where WAHA lives |
 | `WAHA_SESSION` | `default` | Which session to use |
 | `WAHA_WEBHOOK_HMAC_SECRET` | *(empty)* | Webhook signature |

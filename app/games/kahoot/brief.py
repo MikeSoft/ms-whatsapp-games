@@ -15,6 +15,7 @@ import unicodedata
 from dataclasses import dataclass
 
 from app.config import Settings
+from app.i18n import DEFAULT_LANGUAGE, Language
 
 #: Cada patrón captura un número con la palabra que lo cualifica, y se traga
 #: además el andamiaje de alrededor ("que duren", "de a", "y con"). Si sólo
@@ -102,6 +103,10 @@ _LEVEL_LOOKUP: dict[str, str] = {
 }
 
 
+#: Tema cuando el máster no pide ninguno.
+TOPIC_DEFAULT: dict[str, str] = {"es": "cultura general", "en": "general knowledge"}
+
+
 @dataclass(frozen=True)
 class Brief:
     """Lo que el máster pidió, ya acotado a lo que el juego admite."""
@@ -118,10 +123,12 @@ class Brief:
     harden: bool = True
     #: Cuánto dejar pensar al modelo. Vacío no manda el parámetro.
     reasoning_effort: str = ""
+    #: En qué idioma se escriben las preguntas.
+    language: Language = DEFAULT_LANGUAGE
 
     @property
     def topic_or_default(self) -> str:
-        return self.topic or "cultura general"
+        return self.topic or TOPIC_DEFAULT.get(self.language, TOPIC_DEFAULT["es"])
 
     @property
     def level_note(self) -> str:
@@ -202,6 +209,7 @@ def parse_brief(text: str, settings: Settings) -> Brief:
         topic=_clean_topic(resto),
         level=nivel,
         harden=settings.kahoot_harden,
+        language=settings.game_language,
         reasoning_effort=(settings.kahoot_llm_reasoning_effort or "").strip(),
         questions=_clamp(
             found["questions"],

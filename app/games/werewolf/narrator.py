@@ -7,6 +7,7 @@ from typing import Any
 
 from app.core.llm import LLMClient
 from app.games.werewolf import prompts
+from app.i18n import DEFAULT_LANGUAGE, Language
 from app.logging_conf import get_logger
 
 log = get_logger("narrator")
@@ -34,8 +35,9 @@ class Narrator:
     devuelve el texto estático que se le pase como respaldo.
     """
 
-    def __init__(self, llm: LLMClient) -> None:
+    def __init__(self, llm: LLMClient, language: Language = DEFAULT_LANGUAGE) -> None:
         self._llm = llm
+        self._language: Language = language
         self._history: list[str] = []
 
     @property
@@ -63,12 +65,15 @@ class Narrator:
                 facts,
                 context=self._history[-CONTEXT_WINDOW:],
                 max_words=max_words,
+                language=self._language,
             )
             for intento in range(ATTEMPTS):
                 raw = await self._llm.complete(
-                    prompts.SYSTEM, user, max_tokens=token_budget(max_words)
+                    prompts.system_for(self._language),
+                    user,
+                    max_tokens=token_budget(max_words),
                 )
-                text = _tidy(raw) if raw else None
+                text = _tidy(raw, self._language) if raw else None
                 if text:
                     break
                 # Media escena o el andamiaje del modelo no se publican: se
@@ -117,15 +122,29 @@ _WORD_COUNTER = re.compile(r"\s*\(\s*\d{1,3}\s*\)")
 #: que una línea que empieza así es andamiaje.
 _META_BULLET = re.compile(r"^\s*[*\-•]\s+")
 
-#: Vocabulario con el que los modelos que razonan se hablan a sí mismos. La
-#: escena va en español; una línea con esto dentro no es la escena, es el
-#: modelo comprobando su propio trabajo ("Survivors count? Matches 6").
-_ENGLISH = re.compile(
-    r"\b(the|and|without|word|words|count|counts|matches|survivors|"
-    r"check|checking|draft|ensure|avoid|naming|mentioning|should|"
-    r"let me|i will|we need|revised|final answer|output)\b",
-    re.IGNORECASE,
-)
+#: Vocabulario con el que los modelos que razonan se hablan a sí mismos.
+#:
+#: En una partida en español la escena va en español, así que una línea en
+#: inglés no es la escena: es el modelo comprobando su trabajo ("Survivors
+#: count? Matches 6"). En una partida en inglés ese atajo no vale —la escena
+#: también está en inglés— y hay que ir a las frases con las que un modelo se
+#: habla a sí mismo, que no aparecen en una escena narrada.
+_SELF_TALK: dict[str, re.Pattern[str]] = {
+    "es": re.compile(
+        r"\b(the|and|without|word|words|count|counts|matches|survivors|"
+        r"check|checking|draft|ensure|avoid|naming|mentioning|should|"
+        r"let me|i will|we need|revised|final answer|output)\b",
+        re.IGNORECASE,
+    ),
+    "en": re.compile(
+        r"\b(word count|words?\s*:|let me (check|see|count|rewrite)|"
+        r"i (will|should|need to|must) (check|count|make sure|revise|rewrite)|"
+        r"survivors? count|facts? check|double[- ]check|as an ai|"
+        r"final (answer|version)|revised version|draft \d|"
+        r"that(?:'s| is) (exactly )?\d+ words|matches the facts)\b",
+        re.IGNORECASE,
+    ),
+}
 
 #: Arranques que delatan que falta texto por delante: un cierre o un signo de
 #: puntuación suelto. La minúscula no vale como señal: hay escenas que empiezan
@@ -138,7 +157,7 @@ _SENTENCE_START = re.compile(r"(?:^|[.!?…]\s+|\n)([\"“«¡¿A-ZÁÉÍÓÚÜ�
 _TERMINAL = ".!?…"
 
 
-def _tidy(text: str) -> str | None:
+def _tidy(text: str, language: Language = DEFAULT_LANGUAGE) -> str | None:
     """Limpia el texto del modelo, o ``None`` si no hay escena publicable.
 
     Devolver ``None`` es parte del contrato: más vale el respaldo estático que
@@ -147,7 +166,7 @@ def _tidy(text: str) -> str | None:
     """
     cleaned = _WORD_COUNTER.sub("", text or "")
     cleaned = _DOUBLE_STARS.sub("", cleaned).strip()
-    cleaned = _drop_meta_lines(cleaned)
+    cleaned = _drop_meta_lines(cleaned, language)
     cleaned = _strip_wrapping(cleaned)
     cleaned = _drop_leading_fragment(cleaned)
 
@@ -172,12 +191,13 @@ def _tidy(text: str) -> str | None:
     return cleaned
 
 
-def _drop_meta_lines(text: str) -> str:
+def _drop_meta_lines(text: str, language: Language = DEFAULT_LANGUAGE) -> str:
     """Quita las líneas que son repaso del modelo y no narración."""
+    self_talk = _SELF_TALK.get(language, _SELF_TALK[DEFAULT_LANGUAGE])
     lineas = [
         linea
         for linea in text.splitlines()
-        if not _META_BULLET.match(linea) and not _ENGLISH.search(linea)
+        if not _META_BULLET.match(linea) and not self_talk.search(linea)
     ]
     return "\n".join(lineas).strip()
 

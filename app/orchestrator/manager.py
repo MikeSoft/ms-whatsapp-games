@@ -29,8 +29,10 @@ from app.core.llm import LLMClient
 from app.games import registry
 from app.games.base import Game, GameContext, GameResult
 from app.games.transport import WahaTransport
+from app.i18n import Texts
 from app.logging_conf import get_logger
-from app.orchestrator.commands import Command, help_text, parse_command
+from app.orchestrator.commands import Command, parse_command
+from app.orchestrator.texts import TEXTS
 from app.waha.client import WahaClient
 from app.waha.models import InboundMessage, Scope
 
@@ -68,6 +70,8 @@ class Orchestrator:
         checkpointer: Any | None = None,
     ) -> None:
         self.settings = settings
+        self.lang = settings.game_language
+        self.t = Texts(TEXTS, self.lang)
         self.waha = waha
         self.inbox = inbox
         self.store = store
@@ -161,19 +165,26 @@ class Orchestrator:
         await self.waha.send_text(message.chat_id, text)
 
     async def _cmd_help(self, command: Command, message: InboundMessage) -> None:
-        await self._reply(message, help_text(self.settings.command_prefix))
+        await self._reply(message, self.t("help", prefix=self.settings.command_prefix))
 
     async def _cmd_list(self, command: Command, message: InboundMessage) -> None:
         specs = registry.specs()
         if not specs:
-            await self._reply(message, "No hay juegos registrados.")
+            await self._reply(message, self.t("catalogue.empty"))
             return
         prefix = self.settings.command_prefix
-        lineas = ["🎲 *Juegos disponibles*", ""]
+        lineas = [self.t("catalogue.header"), ""]
         for spec in specs:
-            lineas.append(f"*{spec.title}* — {spec.tagline}")
-            lineas.append(f"  {spec.rango_jugadores()}")
-            lineas.append(f"  Lanzar con: `{prefix}juego {spec.key}`")
+            lineas.append(f"*{spec.title_in(self.lang)}* — {spec.tagline_in(self.lang)}")
+            lineas.append(
+                "  "
+                + self.t(
+                    "players.range",
+                    minimum=spec.min_players,
+                    maximum=spec.max_players,
+                )
+            )
+            lineas.append(self.t("catalogue.launch", prefix=prefix, key=spec.key))
             lineas.append("")
         await self._reply(message, "\n".join(lineas).strip())
 
@@ -181,17 +192,20 @@ class Orchestrator:
         if not self._games:
             await self._reply(
                 message,
-                "💤 No hay ninguna partida en marcha.\n"
-                f"Lanza una con `{self.settings.command_prefix}juegos`.",
+                self.t("status.idle", prefix=self.settings.command_prefix),
             )
             return
-        lineas = ["🎯 *Partidas en marcha*", ""]
+        lineas = [self.t("status.header"), ""]
         for game in self._games.values():
             spec = type(game.game).spec
             lineas.append(
-                f"*{spec.title}* en {game.group_id}\n"
-                f"  sesión: `{game.session_id}`\n"
-                f"  lleva {int(game.elapsed)} s"
+                self.t(
+                    "status.row",
+                    title=spec.title_in(self.lang),
+                    group=game.group_id,
+                    session=game.session_id,
+                    seconds=int(game.elapsed),
+                )
             )
         await self._reply(message, "\n".join(lineas))
 
@@ -199,18 +213,16 @@ class Orchestrator:
         group_id = self._resolve_group(message)
         cancelled = await self.cancel(group_id)
         if cancelled:
-            await self._reply(message, "🛑 Partida cancelada.")
+            await self._reply(message, self.t("cancel.done"))
         else:
-            await self._reply(message, "No había ninguna partida que cancelar.")
+            await self._reply(message, self.t("cancel.nothing"))
 
     async def _cmd_start(self, command: Command, message: InboundMessage) -> None:
         nombre = command.argument
         if not nombre:
             await self._reply(
                 message,
-                "Dime qué juego. Por ejemplo:\n"
-                f"`{self.settings.command_prefix}juego hombreslobo`\n\n"
-                f"Ver todos: `{self.settings.command_prefix}juegos`",
+                self.t("start.which", prefix=self.settings.command_prefix),
             )
             return
 
@@ -220,27 +232,25 @@ class Orchestrator:
         if game_cls is None:
             disponibles = ", ".join(spec.key for spec in registry.specs())
             await self._reply(
-                message,
-                f"No conozco el juego «{nombre}».\nDisponibles: {disponibles}",
+                message, self.t("start.unknown", name=nombre, available=disponibles)
             )
             return
 
         group_id = self._resolve_group(message)
         if not group_id:
-            await self._reply(
-                message,
-                "No sé en qué grupo jugar: la partida se juega donde se pide. "
-                "Manda el comando dentro del grupo.",
-            )
+            await self._reply(message, self.t("start.no_group"))
             return
 
         async with self._lock:
             if group_id in self._games:
-                actual = type(self._games[group_id].game).spec.title
+                actual = type(self._games[group_id].game).spec.title_in(self.lang)
                 await self._reply(
                     message,
-                    f"Ya hay una partida de *{actual}* en marcha en ese grupo. "
-                    f"Usa `{self.settings.command_prefix}cancelar` primero.",
+                    self.t(
+                        "start.busy",
+                        title=actual,
+                        prefix=self.settings.command_prefix,
+                    ),
                 )
                 return
 
@@ -249,15 +259,19 @@ class Orchestrator:
             )
 
         spec = type(running.game).spec
-        narracion = (
-            "🧠 narración generada"
+        narracion = self.t(
+            "narration.model"
             if running.game.ctx.llm.available
-            else "📜 narración estática"
+            else "narration.static"
         )
         await self._reply(
             message,
-            f"✅ Lanzando *{spec.title}* en el grupo.\n{narracion}\n"
-            f"Sesión: `{running.session_id}`",
+            self.t(
+                "start.launched",
+                title=spec.title_in(self.lang),
+                narration=narracion,
+                session=running.session_id,
+            ),
         )
 
     def _resolve_group(self, message: InboundMessage) -> str:
@@ -360,8 +374,7 @@ class Orchestrator:
                 log.warning("orchestrator.unlock_failed", session_id=session_id)
             await self._notify(
                 game.ctx.started_by,
-                f"⚠️ La partida `{session_id}` falló: {exc}\n"
-                "El grupo se ha reabierto por si quedó silenciado.",
+                self.t("game.failed", session=session_id, error=exc),
             )
             return result
         finally:

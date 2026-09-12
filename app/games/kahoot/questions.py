@@ -28,7 +28,7 @@ MAX_QUESTION_CHARS = 240
 MAX_OPTION_CHARS = 90
 
 SYSTEM = """\
-Escribes preguntas de concurso tipo Kahoot para jugar por WhatsApp, en español.
+Escribes preguntas de concurso tipo Kahoot para jugar por WhatsApp, en {idioma}.
 
 FORMATO
 1. Devuelves únicamente un objeto JSON, sin texto alrededor ni vallas de código.
@@ -216,7 +216,7 @@ async def harden(
         return preguntas
 
     data = await llm.complete_json(
-        HARDEN_SYSTEM,
+        harden_system_for(brief),
         _harden_prompt(brief, preguntas),
         temperature=0.7,
         max_tokens=output_budget(brief),
@@ -239,6 +239,26 @@ async def harden(
 #: preguntas que son la misma con otras palabras. Sin margen, cada descarte
 #: deja la tanda por debajo de lo que pidió el máster.
 EXTRA_QUESTIONS = 3
+
+
+#: Cómo se nombra cada idioma dentro del prompt. El prompt sigue en español
+#: —sus reglas son las mismas y mantener una sola versión evita que se
+#: separen— pero el cuestionario sale en el idioma de la partida, que es lo
+#: único que lee la gente.
+IDIOMAS: dict[str, str] = {"es": "español", "en": "inglés"}
+
+
+def system_for(brief: Brief) -> str:
+    """El prompt de generación, fijado al idioma de la partida."""
+    # Un replace y no un format: el prompt lleva el JSON de ejemplo con sus
+    # llaves dentro, y format las tomaría por huecos suyos.
+    return SYSTEM.replace("{idioma}", IDIOMAS.get(brief.language, IDIOMAS["es"]))
+
+
+def harden_system_for(brief: Brief) -> str:
+    """Igual, para la segunda pasada: no puede cambiar de idioma a mitad."""
+    idioma = IDIOMAS.get(brief.language, IDIOMAS["es"])
+    return f"{HARDEN_SYSTEM}\n\nLas preguntas van en {idioma}."
 
 
 def _prompt(brief: Brief) -> str:
@@ -264,8 +284,18 @@ def _clean(value: Any, limit: int) -> str:
     return " ".join(value.split())[:limit].strip()
 
 
-#: Palabras que no distinguen una pregunta de otra.
+#: Palabras que no distinguen una pregunta de otra. Las de los dos idiomas en
+#: la misma lista: sirve para comparar preguntas entre sí, y una palabra vacía
+#: en inglés tampoco distingue nada en una pregunta en español.
 _STOPWORDS = frozenset(
+    [
+        "a", "an", "and", "are", "as", "at", "be", "been", "but", "by", "did",
+        "do", "does", "for", "from", "had", "has", "have", "how", "in", "is",
+        "it", "its", "many", "much", "of", "on", "or", "that", "the", "their",
+        "there", "these", "they", "this", "those", "to", "was", "were", "what",
+        "when", "where", "which", "who", "whom", "whose", "why", "with",
+    ]
+) | frozenset(
     ["a", "al", "ante", "cada", "como", "con", "cual", "cuales", "cuando", "cuantos", "de", "del", "desde", "donde", "dos", "el", "ella", "ellas", "ellos", "en", "entre", "era", "es", "esa", "ese", "eso", "esta", "este", "esto", "fue", "fueron", "hay", "la", "las", "le", "les", "lo", "los", "mas", "mismo", "muy", "no", "para", "pero", "por", "porque", "que", "quien", "quienes", "se", "segun", "ser", "si", "sin", "sobre", "su", "sus", "también", "tiene", "tienen", "tras", "un", "una", "uno", "unos", "y", "ya"]
 )
 
@@ -470,7 +500,7 @@ async def generate(
     """
     if llm.available:
         data = await llm.complete_json(
-            SYSTEM,
+            system_for(brief),
             _prompt(brief),
             temperature=0.8,
             max_tokens=output_budget(brief),

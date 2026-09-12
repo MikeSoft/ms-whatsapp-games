@@ -79,6 +79,7 @@ route or a field, those two files are the only ones touched.
 | `app/core/llm.py` | Model access with graceful degradation | Another provider |
 | `app/core/checkpointer.py` | LangGraph checkpointer | Changing graph persistence |
 | `app/config.py` | All environment configuration | A new setting (**and `.env.example`**) |
+| `app/i18n.py` | The language catalogues: what the games say, in each language | A new language, or the shape of a catalogue |
 | `app/logging_conf.py` | Structured logging | — |
 
 ### Orchestration: deciding what runs

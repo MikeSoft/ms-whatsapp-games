@@ -122,6 +122,17 @@ class WerewolfGame(Game):
             "De noche el grupo se silencia y los roles actúan por privado; de día "
             "se debate y se vota a quién linchar."
         ),
+        i18n={
+            "en": {
+                "title": "Werewolf",
+                "tagline": "Wolves feed at night; the village lynches by day.",
+                "how_to": (
+                    "Roles are dealt by private chat (wolves, seer, witch, hunter, "
+                    "cupid). At night the group is muted and the roles act in "
+                    "private; by day everyone argues and votes on who to lynch."
+                ),
+            }
+        },
     )
 
     def __init__(
@@ -134,7 +145,7 @@ class WerewolfGame(Game):
         super().__init__(ctx)
         self.nodes = WerewolfNodes(
             ctx,
-            narrator=Narrator(ctx.llm),
+            narrator=Narrator(ctx.llm, language=ctx.settings.game_language),
             timers=timers,
             rng=rng,
         )

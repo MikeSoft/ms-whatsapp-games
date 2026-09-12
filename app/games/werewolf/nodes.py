@@ -51,6 +51,8 @@ from app.games.werewolf.state import (
     with_role,
     wolves,
 )
+from app.games.werewolf.texts import CAUSES, TEXTS
+from app.i18n import Texts
 from app.logging_conf import get_logger
 from app.waha.models import InboundMessage
 
@@ -149,17 +151,6 @@ class Timers:
         )
 
 
-def _seconds(value: float) -> str:
-    """Formatea una espera para anunciarla ("90 s" -> "1 min 30 s")."""
-    total = round(value)
-    if total < 60:
-        return f"{total} segundos"
-    minutes, rest = divmod(total, 60)
-    if not rest:
-        return f"{minutes} minuto{'s' if minutes != 1 else ''}"
-    return f"{minutes} min {rest} s"
-
-
 class WerewolfNodes:
     """Colección de nodos, con el contexto de la partida inyectado."""
 
@@ -173,7 +164,9 @@ class WerewolfNodes:
     ) -> None:
         self.ctx = ctx
         self.settings = ctx.settings
-        self.narrator = narrator or Narrator(ctx.llm)
+        self.lang = ctx.settings.game_language
+        self.t = Texts(TEXTS, self.lang)
+        self.narrator = narrator or Narrator(ctx.llm, language=self.lang)
         self.timers = timers or Timers.from_settings(ctx.settings)
         self.rng = rng or random.Random()
         # Lo narrado al grupo desde el último nodo. Los nodos corren en serie,
@@ -181,6 +174,36 @@ class WerewolfNodes:
         self._narrated: list[str] = []
 
     # ================================================================ ayudas
+    def _seconds(self, value: float) -> str:
+        """Formatea una espera para anunciarla ("90 s" -> "1 min 30 s")."""
+        total = round(value)
+        if total < 60:
+            return self.t("time.seconds", total=total)
+        minutes, rest = divmod(total, 60)
+        if rest:
+            return self.t("time.min_sec", minutes=minutes, rest=rest)
+        clave = "time.minute" if minutes == 1 else "time.minutes"
+        return self.t(clave, minutes=minutes)
+
+    def respaldo(self, key: str) -> str:
+        """El texto estático de una escena, para cuando el modelo no está."""
+        return prompts.fallbacks(self.lang)[key]
+
+    def _fallback_dia(self, hechos_noche: dict[str, Any]) -> str:
+        """Respaldo del mensaje que junta amanecer y juicio, sin modelo detrás."""
+        if hechos_noche.get("victimas"):
+            amanecer = self.respaldo("dawn_deaths")
+        elif hechos_noche.get("intervencion_misteriosa"):
+            amanecer = self.respaldo("dawn_quiet")
+        else:
+            amanecer = self.respaldo("dawn_calm")
+        return f"{amanecer} {self.respaldo('trial')}"
+
+    def _cause_text(self, cause: str | None) -> str:
+        """Cómo se cuenta esta muerte, entre las formas de su causa."""
+        formas = CAUSES[self.lang].get(cause or "") or CAUSES[self.lang][""]
+        return self.rng.choice(formas)
+
     def _texto(self) -> GroupText:
         """Compositor de un mensaje de grupo, con las menciones que acumule.
 
@@ -354,7 +377,7 @@ class WerewolfNodes:
             text = await self.narrator.flavour(
                 scene,
                 facts,
-                fallback=prompts.filler_for(index),
+                fallback=prompts.filler_for(index, self.lang),
                 max_words=max_words,
                 remember=False,
             )
@@ -365,7 +388,7 @@ class WerewolfNodes:
             if players:
                 text = self._etiqueta_nombres(text, players, texto)
             await self._group(
-                f"{text}\n\n⏳ Quedan ~{_seconds(restante)}.",
+                f"{text}\n\n" + self.t("wait.remaining", time=self._seconds(restante)),
                 record=False,
                 texto=texto,
             )
@@ -442,24 +465,25 @@ class WerewolfNodes:
         flavour = await self.narrator.flavour(
             "apertura",
             {"juego": "El Hombre Lobo", "aldea": "Castronegro"},
-            fallback=prompts.FALLBACK_OPENING,
+            fallback=self.respaldo("opening"),
             max_words=60,
         )
         seconds = self.timers.recruit
         await self._group(
             f"{flavour}\n\n"
-            "🐺 *EL HOMBRE LOBO* — se abren las inscripciones.\n\n"
-            f"Escribe *YO* en los próximos {_seconds(seconds)} para entrar a la partida.\n"
-            f"Hacen falta al menos {self.settings.werewolf_min_players} jugadores "
-            f"(máximo {self.settings.werewolf_max_players})."
+            + self.t(
+                "recruit.open",
+                time=self._seconds(seconds),
+                minimum=self.settings.werewolf_min_players,
+                maximum=self.settings.werewolf_max_players,
+            )
         )
 
         reminder = None
         if seconds >= 20:
             reminder = await self._reminder(
                 seconds * 0.6,
-                f"⏳ Quedan ~{_seconds(seconds * 0.4)} para cerrar inscripciones. "
-                "Todavía puedes escribir *YO*.",
+                self.t("recruit.reminder", time=self._seconds(seconds * 0.4)),
             )
 
         try:
@@ -472,6 +496,7 @@ class WerewolfNodes:
             messages,
             llm=self.ctx.llm,
             max_players=self.settings.werewolf_max_players,
+            language=self.lang,
         )
         log.info(
             "werewolf.recruited",
@@ -483,13 +508,11 @@ class WerewolfNodes:
         minimum = max(self.settings.werewolf_min_players, 3)
         if len(joiners) < minimum:
             texto = self._texto()
-            nombres = (
-                ", ".join(texto.tag(j.jid, j.name) for j in joiners) or "nadie"
-            )
+            nombres = ", ".join(
+                texto.tag(j.jid, j.name) for j in joiners
+            ) or self.t("recruit.nobody")
             await self._group(
-                "🌫️ Inscripciones cerradas. Sólo se apuntó: "
-                f"{nombres}.\n\nHacen falta {minimum} jugadores para empezar. "
-                "Vuelve a lanzar el juego cuando haya más gente.",
+                self.t("recruit.not_enough", names=nombres, minimum=minimum),
                 texto=texto,
             )
             await self.ctx.record(
@@ -543,17 +566,18 @@ class WerewolfNodes:
                 "jugadores": [p["name"] for p in assigned],
                 "total": len(assigned),
             },
-            fallback=prompts.FALLBACK_INTRO,
+            fallback=self.respaldo("intro"),
             max_words=80,
         )
         texto = self._texto()
         await self._group(
             f"{intro}\n\n"
-            f"🎭 *{len(assigned)} jugadores* entran a la partida:\n"
-            f"{tagged_roster(assigned, texto)}\n\n"
-            f"El reparto de esta noche:\n{roster_summary(roles)}\n\n"
-            "🔇 El grupo queda en silencio. Revisa tu chat privado: te acabo de "
-            "enviar tu rol secreto.",
+            + self.t(
+                "deal.announce",
+                count=len(assigned),
+                roster=tagged_roster(assigned, texto),
+                summary=roster_summary(roles, self.lang),
+            ),
             texto=texto,
         )
 
@@ -562,19 +586,21 @@ class WerewolfNodes:
         wolf_pack = [p for p in pack if p["role"] == str(Role.LOBO)]
         messages: list[tuple[str, str]] = []
         for player in pack:
-            details = info(player["role"])
-            body = (
-                f"{details.emoji} Tu rol es *{details.title}*.\n\n"
-                f"{details.briefing}\n\n"
-                f"Jugadores de la partida:\n{roster_lines(pack)}"
+            details = info(player["role"], self.lang)
+            body = self.t(
+                "deal.dm_role",
+                emoji=details.emoji,
+                title=details.title,
+                briefing=details.briefing,
+                roster=roster_lines(pack),
             )
             if player["role"] == str(Role.LOBO):
                 partners = [p for p in wolf_pack if p["jid"] != player["jid"]]
                 if partners:
                     nombres = ", ".join(p["name"] for p in partners)
-                    body += f"\n\n🐺 Tu manada: *{nombres}*. Podéis confiar entre vosotros."
+                    body += self.t("deal.pack", names=nombres)
                 else:
-                    body += "\n\n🐺 Eres el único lobo. Nadie te cubrirá: disimula bien."
+                    body += self.t("deal.lone_wolf")
             messages.append((player["jid"], body))
 
         await self._dm_all(messages)
@@ -621,15 +647,18 @@ class WerewolfNodes:
                 "vivos": len(alive(players)),
                 **self._voces(state),
             },
-            fallback=prompts.FALLBACK_NIGHT,
+            fallback=self.respaldo("night"),
             max_words=70,
         )
         texto_noche = self._texto()
         night = self._etiqueta_nombres(night, players, texto_noche)
         await self._group(
-            f"🌙 *NOCHE {round_no}*\n\n{night}\n\n"
-            f"El grupo está en silencio. Los roles con poder tienen "
-            f"{_seconds(self.timers.night)} para responderme por privado.",
+            self.t(
+                "night.open",
+                round_no=round_no,
+                flavour=night,
+                time=self._seconds(self.timers.night),
+            ),
             texto=texto_noche,
         )
 
@@ -640,14 +669,15 @@ class WerewolfNodes:
             prompts_to_send.append(
                 (
                     wolf["jid"],
-                    f"🐺 *Noche {round_no}.* ¿A quién devoráis?\n\n"
-                    f"{self._targets_block(players, exclude=wolf_exclude)}\n\n"
-                    "Responde con el número o el nombre. "
-                    + (
-                        f"Tu manada ({wolf_names}) también está decidiendo: "
-                        "gana la opción más votada."
-                        if len(pack) > 1
-                        else "Decides tú solo."
+                    self.t(
+                        "night.wolf_prompt",
+                        round_no=round_no,
+                        targets=self._targets_block(players, exclude=wolf_exclude),
+                        note=(
+                            self.t("night.wolf_pack_note", names=wolf_names)
+                            if len(pack) > 1
+                            else self.t("night.wolf_alone_note")
+                        ),
                     ),
                 )
             )
@@ -655,19 +685,21 @@ class WerewolfNodes:
             prompts_to_send.append(
                 (
                     oracle["jid"],
-                    f"🔮 *Noche {round_no}.* ¿De quién quieres conocer la identidad?\n\n"
-                    f"{self._targets_block(players, exclude={oracle['jid']})}\n\n"
-                    "Responde con el número o el nombre.",
+                    self.t(
+                        "night.seer_prompt",
+                        round_no=round_no,
+                        targets=self._targets_block(players, exclude={oracle["jid"]}),
+                    ),
                 )
             )
         for love in cupid:
             prompts_to_send.append(
                 (
                     love["jid"],
-                    "🏹💘 *Primera noche.* Elige a dos jugadores que se enamoran.\n\n"
-                    f"{self._targets_block(players)}\n\n"
-                    "Responde con los dos números separados por un espacio (por ejemplo: 2 5). "
-                    "Si uno muere, el otro muere de tristeza.",
+                    self.t(
+                        "night.cupid_prompt",
+                        targets=self._targets_block(players),
+                    ),
                 )
             )
 
@@ -726,12 +758,9 @@ class WerewolfNodes:
             night_actions["wolf_votes"] = wolf_votes
             victim = by_jid(players, chosen)
             if len(pack) > 1:
-                aviso = (
-                    f"🐺 La manada ha decidido: *{victim['name'] if victim else chosen}*."
-                    if len(top) == 1
-                    else f"🐺 Había empate; el instinto eligió a "
-                    f"*{victim['name'] if victim else chosen}*."
-                )
+                nombre = victim["name"] if victim else chosen
+                clave = "night.wolves_decided" if len(top) == 1 else "night.wolves_tie"
+                aviso = self.t(clave, name=nombre)
                 await self._dm_all([(w["jid"], aviso) for w in pack])
         else:
             # Sin respuesta no hay ataque: mejor una noche en calma que una
@@ -743,27 +772,26 @@ class WerewolfNodes:
         for oracle in seer:
             message = latest.get(oracle["jid"])
             if message is None:
-                await self._dm(
-                    oracle["jid"], "🔮 Se te agotó el tiempo. Esta noche no ves nada."
-                )
+                await self._dm(oracle["jid"], self.t("night.seer_timeout"))
                 continue
             target = parse_player_reference(
                 message.text, vivos, exclude=[oracle["jid"]]
             )
             if target is None:
-                await self._dm(
-                    oracle["jid"],
-                    "🔮 No entendí a quién te referías, y la visión se apagó.",
-                )
+                await self._dm(oracle["jid"], self.t("night.seer_unclear"))
                 continue
             es_lobo = target["role"] == str(Role.LOBO)
             night_actions["seer_query"] = target["jid"]
             night_actions["seer_result"] = es_lobo
             await self._dm(
                 oracle["jid"],
-                f"🔮 Las cartas hablan sobre *{target['name']}*: "
-                + ("*ES UN HOMBRE LOBO*. 🐺" if es_lobo else "*no es un Hombre Lobo*.")
-                + "\n\nGuárdate la información o úsala de día: tú decides.",
+                self.t(
+                    "night.seer_result",
+                    name=target["name"],
+                    verdict=self.t(
+                        "night.seer_is_wolf" if es_lobo else "night.seer_not_wolf"
+                    ),
+                ),
             )
 
         # --- cupido: enamora a dos --------------------------------------
@@ -774,31 +802,19 @@ class WerewolfNodes:
             )
             if pair is None:
                 if message is not None:
-                    await self._dm(
-                        love["jid"],
-                        "🏹 No entendí los dos nombres, así que la flecha se perdió "
-                        "en la niebla. Esta partida no habrá enamorados.",
-                    )
+                    await self._dm(love["jid"], self.t("night.cupid_unclear"))
                 continue
             first, second = pair
             updates["lovers"] = [first["jid"], second["jid"]]
             night_actions["lovers"] = [first["jid"], second["jid"]]
             await self._dm(
                 love["jid"],
-                f"🏹💘 Has enamorado a *{first['name']}* y *{second['name']}*.",
+                self.t("night.cupid_done", first=first["name"], second=second["name"]),
             )
             await self._dm_all(
                 [
-                    (
-                        first["jid"],
-                        f"💘 Cupido te ha unido a *{second['name']}*. Si uno de los dos "
-                        "muere, el otro muere de tristeza. Protegeos.",
-                    ),
-                    (
-                        second["jid"],
-                        f"💘 Cupido te ha unido a *{first['name']}*. Si uno de los dos "
-                        "muere, el otro muere de tristeza. Protegeos.",
-                    ),
+                    (first["jid"], self.t("night.lovers_note", name=second["name"])),
+                    (second["jid"], self.t("night.lovers_note", name=first["name"])),
                 ]
             )
 
@@ -843,24 +859,26 @@ class WerewolfNodes:
 
         disponibles = []
         if potions.get("vida"):
-            disponibles.append("*vida* (revive a la víctima de esta noche)")
+            disponibles.append(self.t("witch.potion_life"))
         if potions.get("muerte"):
-            disponibles.append("*muerte* (asesina a quien elijas)")
+            disponibles.append(self.t("witch.potion_death"))
 
         if victim is not None:
-            cabecera = f"🧪 Esta noche los lobos atacaron a *{victim['name']}*."
+            cabecera = self.t("witch.attacked", name=victim["name"])
         else:
-            cabecera = "🧪 Esta noche los lobos no atacaron a nadie."
+            cabecera = self.t("witch.quiet")
 
         # La lista que se muestra excluye a la propia bruja, igual que el
         # parser: ofrecerle su nombre y luego no aceptarlo sería una trampa.
         await self._dm(
             witch["jid"],
-            f"{cabecera}\n\n"
-            f"Pociones que te quedan: {', '.join(disponibles)}.\n\n"
-            f"{self._targets_block(players, exclude={witch['jid']})}\n\n"
-            "Responde *curar*, *veneno <número>*, o *nada*. "
-            f"Tienes {_seconds(self.timers.witch)}.",
+            self.t(
+                "witch.prompt",
+                header=cabecera,
+                potions=", ".join(disponibles),
+                targets=self._targets_block(players, exclude={witch["jid"]}),
+                time=self._seconds(self.timers.witch),
+            ),
         )
 
         async with self._fillers(self.timers.witch, round_no=round_no):
@@ -874,7 +892,7 @@ class WerewolfNodes:
         latest = self._last_per_sender(collected)
         message = latest.get(witch["jid"])
         if message is None:
-            await self._dm(witch["jid"], "🧪 Se acabó el tiempo. No usaste ninguna poción.")
+            await self._dm(witch["jid"], self.t("witch.timeout"))
             return {
                 "night_actions": night_actions,
                 "witch_potions": potions,
@@ -887,35 +905,32 @@ class WerewolfNodes:
             potions["vida"] = False
             night_actions["witch_heal"] = victim["jid"]
             await self._dm(
-                witch["jid"],
-                f"🧪 Has usado la poción de vida en *{victim['name']}*. "
-                "Ya no te queda.",
+                witch["jid"], self.t("witch.healed", name=victim["name"])
             )
         elif choice == "vida":
-            motivo = (
-                "ya la usaste" if not potions.get("vida") else "no hay a quién revivir"
+            motivo = self.t(
+                "witch.reason_used"
+                if not potions.get("vida")
+                else "witch.reason_nobody"
             )
-            await self._dm(witch["jid"], f"🧪 No pudiste curar: {motivo}.")
+            await self._dm(witch["jid"], self.t("witch.cannot_heal", reason=motivo))
         elif choice == "muerte" and potions.get("muerte"):
             poison_target = parse_player_reference(
                 message.text, alive(players), exclude=[witch["jid"]]
             )
             if poison_target is None:
-                await self._dm(
-                    witch["jid"],
-                    "🧪 No entendí a quién querías envenenar, así que guardas la poción.",
-                )
+                await self._dm(witch["jid"], self.t("witch.poison_unclear"))
             else:
                 potions["muerte"] = False
                 night_actions["witch_poison"] = poison_target["jid"]
                 await self._dm(
                     witch["jid"],
-                    f"🧪 Has envenenado a *{poison_target['name']}*. Ya no te queda.",
+                    self.t("witch.poisoned", name=poison_target["name"]),
                 )
         elif choice == "muerte":
-            await self._dm(witch["jid"], "🧪 Ya usaste la poción de muerte.")
+            await self._dm(witch["jid"], self.t("witch.death_used"))
         else:
-            await self._dm(witch["jid"], "🧪 Decides no intervenir esta noche.")
+            await self._dm(witch["jid"], self.t("witch.abstain"))
 
         await self.ctx.record(
             "noche.bruja",
@@ -1040,10 +1055,11 @@ class WerewolfNodes:
         await self.ctx.inbox.clear(session_id, keys=[f"dm:{hunter['jid']}"])
         await self._dm(
             hunter["jid"],
-            "🏹 *Acabas de morir.* En tu último aliento puedes disparar una vez.\n\n"
-            f"{self._targets_block(players, exclude={hunter['jid']})}\n\n"
-            f"Responde con el número, o *nadie* si prefieres irte en paz. "
-            f"Tienes {_seconds(self.timers.hunter)}.",
+            self.t(
+                "hunter.prompt",
+                targets=self._targets_block(players, exclude={hunter["jid"]}),
+                time=self._seconds(self.timers.hunter),
+            ),
         )
 
         collected = await self.ctx.inbox.collect(
@@ -1059,14 +1075,14 @@ class WerewolfNodes:
         )
         message = self._last_per_sender(collected).get(hunter["jid"])
         if message is None or is_abstention(message.text):
-            await self._dm(hunter["jid"], "🏹 Bajas el arma. No te llevas a nadie.")
+            await self._dm(hunter["jid"], self.t("hunter.lowered"))
             return None
 
         target = parse_player_reference(message.text, options)
         if target is None:
-            await self._dm(hunter["jid"], "🏹 El disparo se pierde en la niebla.")
+            await self._dm(hunter["jid"], self.t("hunter.missed"))
             return None
-        await self._dm(hunter["jid"], f"🏹 Te llevas a *{target['name']}* contigo.")
+        await self._dm(hunter["jid"], self.t("hunter.takes", name=target["name"]))
         return target["jid"]
 
     # ================================================== fase 3b: el amanecer
@@ -1124,11 +1140,11 @@ class WerewolfNodes:
                 "intervencion_misteriosa": saved,
                 "supervivientes": vivos,
             }
-            return "🕊️ Esta noche no murió nadie.", hechos
+            return self.t("day.nobody_died"), hechos
 
         lineas = [self._death_line(victim, texto) for victim in victims]
         lineas.append("")
-        lineas.append("Quien haya caído ya no participa: ignorad lo que escriba.")
+        lineas.append(self.t("day.ignore_the_fallen"))
         hechos = {
             "victimas": [
                 {"nombre": v["name"], "causa": v.get("death_cause")} for v in victims
@@ -1139,11 +1155,16 @@ class WerewolfNodes:
 
     def _death_line(self, victim: Player, texto: GroupText) -> str:
         """Una muerte, contada con algo más que un parte médico."""
-        causa = _cause_text(victim.get("death_cause"), self.rng)
+        causa = self._cause_text(victim.get("death_cause"))
         etiqueta = tag(victim, texto)
         if self.settings.werewolf_reveal_role_on_death:
-            return f"☠️ {etiqueta} {causa} — era {role_title(victim)}"
-        return f"☠️ {etiqueta} {causa}"
+            return self.t(
+                "day.death_line",
+                tag=etiqueta,
+                cause=causa,
+                role=role_title(victim, self.lang),
+            )
+        return self.t("day.death_line_plain", tag=etiqueta, cause=causa)
 
     # ============================================ evaluación de la victoria
     async def evaluar(self, state: WerewolfState) -> dict[str, Any]:
@@ -1232,7 +1253,11 @@ class WerewolfNodes:
                 # hablando en lugar de empezar de cero cada día.
                 **self._voces(state),
             },
-            fallback=_fallback_dia(hechos_noche) if amanecio else prompts.FALLBACK_TRIAL,
+            fallback=(
+                self._fallback_dia(hechos_noche)
+                if amanecio
+                else self.respaldo("trial")
+            ),
             max_words=110 if amanecio else 70,
         )
         # El juicio empieza con este anuncio, no antes. El buzón del grupo
@@ -1247,15 +1272,18 @@ class WerewolfNodes:
         vivos = alive(players)
         partes: list[str] = []
         if amanecio:
-            partes.append(f"🌅 *AMANECE EL DÍA {round_no}*\n\n{flavour}\n\n{cuerpo}")
+            cabecera = self.t("day.header", round_no=round_no)
+            partes.append(f"{cabecera}\n\n{flavour}\n\n{cuerpo}")
         else:
             partes.append(flavour)
         partes.append(
-            f"⚖️ *EL JUICIO — día {round_no}*\n\n"
-            f"Tenéis {_seconds(self.timers.debate)} para acusaros. "
-            "Al terminar abriré la votación.\n\n"
-            f"Sospechosos ({len(vivos)}):\n{tagged_roster(players, texto)}\n\n"
-            "🔊 El chat está abierto."
+            self.t(
+                "day.trial",
+                round_no=round_no,
+                time=self._seconds(self.timers.debate),
+                count=len(vivos),
+                roster=tagged_roster(players, texto),
+            )
         )
         await self._group("\n\n".join(partes), texto=texto)
 
@@ -1398,22 +1426,20 @@ class WerewolfNodes:
         if len(opciones) >= 2:
             encuesta_ok = (
                 await self.ctx.transport.send_poll(
-                    f"¿A quién linchamos? (día {round_no})", opciones
+                    self.t("vote.poll_question", round_no=round_no), opciones
                 )
                 is not None
             )
 
-        instruccion = (
-            "Vota en la encuesta de arriba"
-            if encuesta_ok
-            else "Escribe en el grupo el número del acusado"
-        )
+        instruccion = self.t("vote.use_poll" if encuesta_ok else "vote.use_text")
         texto = self._texto()
         await self._group(
-            f"🗳️ *VOTACIÓN* — {_seconds(self.timers.vote)}.\n\n"
-            f"{instruccion}. También vale escribir el número o el nombre aquí.\n"
-            "Escribe *paso* para abstenerte. Sólo cuentan los votos de los vivos.\n\n"
-            f"{tagged_roster(players, texto)}",
+            self.t(
+                "vote.body",
+                time=self._seconds(self.timers.vote),
+                instruction=instruccion,
+                roster=tagged_roster(players, texto),
+            ),
             texto=texto,
         )
 
@@ -1459,7 +1485,9 @@ class WerewolfNodes:
         # El recuento y el anuncio comparten compositor: las menciones que
         # acumule el listado de votos tienen que viajar con el mismo mensaje.
         texto_recuento = self._texto()
-        recuento = votes_breakdown(votes, players, texto_recuento)
+        recuento = votes_breakdown(
+            votes, players, texto_recuento, self.lang
+        )
 
         lynched_jid: str | None = None
         if len(top) == 1:
@@ -1475,13 +1503,12 @@ class WerewolfNodes:
                     "empate": len(top) > 1,
                     **self._voces(state),
                 },
-                fallback=prompts.FALLBACK_NO_LYNCH,
+                fallback=self.respaldo("no_lynch"),
                 max_words=60,
             )
             flavour = self._etiqueta_nombres(flavour, players, texto_recuento)
             await self._group(
-                f"⚖️ *VEREDICTO*\n\n{recuento}\n\n{flavour}\n\n"
-                "🤷 Hoy no se lincha a nadie.",
+                self.t("verdict.no_lynch", tally=recuento, flavour=flavour),
                 texto=texto_recuento,
             )
             await self.ctx.record(
@@ -1516,30 +1543,38 @@ class WerewolfNodes:
                 "ronda": round_no,
                 "linchado": condenado["name"] if condenado else lynched_jid,
                 "votos": count,
-                "rol_revelado": info(condenado["role"]).title if condenado else None,
+                "rol_revelado": (
+                    info(condenado["role"], self.lang).title if condenado else None
+                ),
                 "se_dijo": list(state.get("debate_log") or []),
             },
-            fallback=prompts.FALLBACK_VERDICT,
+            fallback=self.respaldo("verdict"),
             max_words=80,
         )
 
         flavour = self._etiqueta_nombres(flavour, players, texto_recuento)
-        lineas = [f"⚖️ *VEREDICTO — día {round_no}*", "", recuento, "", flavour, ""]
+        lineas = [
+            self.t("verdict.header", round_no=round_no), "", recuento, "", flavour, "",
+        ]
         for death in deaths:
             victim = by_jid(players, death["jid"])
-            titulo = role_title(victim) if victim else death["role"]
-            causa = _cause_text(death["cause"])
-            etiqueta = (
-                tag(victim, texto_recuento) if victim else death["name"]
+            titulo = role_title(victim, self.lang) if victim else death["role"]
+            etiqueta = tag(victim, texto_recuento) if victim else death["name"]
+            lineas.append(
+                self.t(
+                    "day.death_line",
+                    tag=etiqueta,
+                    cause=self._cause_text(death["cause"]),
+                    role=titulo,
+                )
             )
-            lineas.append(f"☠️ {etiqueta} {causa} — era {titulo}")
         vivos = alive(players)
         lineas.extend(
             [
                 "",
-                "Quien haya caído ya no participa: ignorad lo que escriba.",
+                self.t("day.ignore_the_fallen"),
                 "",
-                f"Siguen vivos ({len(vivos)}):",
+                self.t("verdict.still_alive", count=len(vivos)),
                 tagged_roster(players, texto_recuento),
             ]
         )
@@ -1577,11 +1612,12 @@ class WerewolfNodes:
             # Reclutamiento fallido: el mensaje ya se envió en su nodo.
             return {"phase": "fin", "finished": True, **self._flush_narrative()}
 
+        respaldos = prompts.fallbacks(self.lang)
         textos = {
-            "lobos": (prompts.FALLBACK_WOLVES_WIN, "🐺 *GANAN LOS HOMBRES LOBO*"),
-            "pueblo": (prompts.FALLBACK_VILLAGE_WIN, "🎉 *GANA EL PUEBLO*"),
-            "enamorados": (prompts.FALLBACK_LOVERS_WIN, "💞 *GANAN LOS ENAMORADOS*"),
-            "nadie": (prompts.FALLBACK_ABORTED, "🌫️ *LA PARTIDA QUEDA EN TABLAS*"),
+            "lobos": (respaldos["wolves_win"], self.t("final.wolves_win")),
+            "pueblo": (respaldos["village_win"], self.t("final.village_win")),
+            "enamorados": (respaldos["lovers_win"], self.t("final.lovers_win")),
+            "nadie": (respaldos["aborted"], self.t("final.draw")),
         }
         fallback, titular = textos.get(winner or "nadie", textos["nadie"])
 
@@ -1615,10 +1651,13 @@ class WerewolfNodes:
             partes += ["", cuerpo]
         partes += [
             "",
-            f"🎭 *Todos los roles:*\n{public_summary(players, texto)}",
+            self.t(
+                "final.all_roles",
+                summary=public_summary(players, texto, self.lang),
+            ),
             "",
-            f"Rondas jugadas: {max(1, state['round_no'] - 1)}.",
-            "Gracias por jugar. 🐺",
+            self.t("final.rounds", rounds=max(1, state["round_no"] - 1)),
+            self.t("final.thanks"),
         ]
         await self._group("\n".join(partes), texto=texto)
         return {
@@ -1629,60 +1668,4 @@ class WerewolfNodes:
         }
 
 
-#: Cómo se cuenta cada muerte. Varias formas por causa: el parte de bajas se
-#: repite cada ronda y con una sola frase por causa la partida acaba sonando a
-#: formulario. El hecho es el mismo —quién murió y de qué— y lo decide el
-#: código; lo que cambia es cómo se dice.
-_CAUSE_TEXTS: dict[str, tuple[str, ...]] = {
-    "lobos": (
-        "fue devorado por los lobos",
-        "amaneció con la puerta arrancada y el zarpazo todavía fresco",
-        "no llegó al amanecer: los lobos se lo llevaron monte adentro",
-    ),
-    "veneno": (
-        "apareció envenenado",
-        "se quedó frío en su cama, sin una sola herida encima",
-        "amaneció con un frasco vacío entre los dedos",
-    ),
-    "amor": (
-        "murió de tristeza al perder a su amor",
-        "no quiso quedarse cuando se llevaron a su amor",
-        "siguió a su amor antes de que cantara el gallo",
-    ),
-    "cazador": (
-        "cayó por el último disparo del cazador",
-        "se llevó el último disparo del cazador",
-        "cayó con el eco de ese disparo todavía en la plaza",
-    ),
-    "linchamiento": (
-        "fue linchado por la aldea",
-        "acabó con la soga de la aldea al cuello",
-        "no alcanzó a terminar su defensa: la cuerda ya estaba lista",
-    ),
-}
 
-
-def _cause_text(cause: str | None, rng: random.Random | None = None) -> str:
-    """Cómo murió alguien. Con ``rng`` se elige entre las formas de esa causa.
-
-    Sin ``rng`` devuelve siempre la primera, que es la seca: los tests que
-    comprueban la mecánica no tienen por qué depender del azar.
-    """
-    formas = _CAUSE_TEXTS.get(cause or "")
-    if not formas:
-        return "murió"
-    return rng.choice(formas) if rng is not None else formas[0]
-
-
-def _fallback_dia(hechos_noche: dict[str, Any]) -> str:
-    """Respaldo del mensaje que junta amanecer y juicio, sin modelo detrás."""
-    if hechos_noche.get("victimas"):
-        amanecer = prompts.FALLBACK_DAWN_DEATHS
-    elif hechos_noche.get("intervencion_misteriosa"):
-        amanecer = prompts.FALLBACK_DAWN_QUIET
-    else:
-        amanecer = (
-            "🌅 Amanece sin sangre. Los lobos no se pusieron de acuerdo y la "
-            "aldea despierta entera, aunque nadie sabe por qué."
-        )
-    return f"{amanecer} {prompts.FALLBACK_TRIAL}"

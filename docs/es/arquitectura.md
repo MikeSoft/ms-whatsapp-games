@@ -79,6 +79,7 @@ tocan sólo esos dos ficheros.
 | `app/core/llm.py` | Acceso al modelo con degradación elegante | Otro proveedor |
 | `app/core/checkpointer.py` | Checkpointer de LangGraph | Cambiar la persistencia del grafo |
 | `app/config.py` | Toda la configuración por entorno | Un ajuste nuevo (**y `.env.example`**) |
+| `app/i18n.py` | Catálogos de idioma: lo que dice cada juego, en cada idioma | Un idioma nuevo, o la forma de un catálogo |
 | `app/logging_conf.py` | Logging estructurado | — |
 
 ### Orquestación: decidir qué corre

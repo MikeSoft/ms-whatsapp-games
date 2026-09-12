@@ -210,6 +210,7 @@ Con `MANAGE_GROUP_PERMISSIONS=false` ni se comprueba.
 | `WEREWOLF_TIE_BREAK` | `none` | `none` = un empate no lincha; `random` = decide el azar |
 | `WEREWOLF_REVEAL_ROLE_ON_DEATH` | `true` | Revelar el rol de quien muere de noche |
 | `MANAGE_GROUP_PERMISSIONS` | `true` | Silenciar el grupo de noche |
+| `GAME_LANGUAGE` | `es` | Idioma en que se escribe todo: `es` o `en` |
 
 ---
 

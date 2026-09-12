@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
+
+from app.i18n import DEFAULT_LANGUAGE, Language
 
 
 class Role(StrEnum):
@@ -36,6 +38,54 @@ class RoleInfo:
     #: Si sólo actúa la primera noche.
     first_night_only: bool = False
 
+
+#: Los textos de cada rol en el otro idioma. La estructura —equipo, si actúa
+#: de noche, emoji— no cambia con el idioma, así que sólo se traduce lo que
+#: lee un jugador: el nombre, su plural y el briefing que le llega al privado.
+ROLE_TEXTS_EN: dict[Role, tuple[str, str, str]] = {
+    Role.LOBO: (
+        "Werewolf",
+        "Werewolves",
+        "Each night I will ask you here who you want to devour. "
+        "By day, act like the most innocent villager in town. "
+        "You win when there are as many wolves as villagers.",
+    ),
+    Role.ALDEANO: (
+        "Villager",
+        "Villagers",
+        "You have no powers: only your instinct and your way with words. "
+        "By day, argue, accuse and vote. You win when no wolf is left alive.",
+    ),
+    Role.VIDENTE: (
+        "Seer",
+        "Seers",
+        "Each night you may ask me about one player's identity and I will tell "
+        "you whether they are a Werewolf. You are the village's most valuable "
+        "role: if they find you out, you are eaten first.",
+    ),
+    Role.BRUJA: (
+        "Witch",
+        "Witches",
+        "You have two single-use potions for the whole game: one of life, to "
+        "revive the wolves' victim, and one of death, to kill whoever you "
+        "want. Each night I will tell you who was attacked and you decide "
+        "whether to step in.",
+    ),
+    Role.CAZADOR: (
+        "Hunter",
+        "Hunters",
+        "If you die (at night to the wolves or by day to a lynching), with "
+        "your last breath I will ask you who you are taking to the grave with "
+        "you. One shot, one victim.",
+    ),
+    Role.CUPIDO: (
+        "Cupid",
+        "Cupids",
+        "You only act on the first night: you choose two players who fall in "
+        "love. If one dies, the other dies of grief at once. You may choose "
+        "yourself.",
+    ),
+}
 
 ROLES: dict[Role, RoleInfo] = {
     Role.LOBO: RoleInfo(
@@ -127,8 +177,16 @@ SPECIAL_PRIORITY: tuple[tuple[Role, int], ...] = (
 ABSOLUTE_MIN_PLAYERS = 3
 
 
-def info(role: Role | str) -> RoleInfo:
-    return ROLES[Role(role)]
+def info(role: Role | str, language: Language = DEFAULT_LANGUAGE) -> RoleInfo:
+    """La ficha del rol, con sus textos en el idioma de la partida."""
+    details = ROLES[Role(role)]
+    if language == DEFAULT_LANGUAGE:
+        return details
+    traduccion = ROLE_TEXTS_EN.get(Role(role))
+    if traduccion is None:
+        return details
+    title, plural, briefing = traduccion
+    return replace(details, title=title, plural=plural, briefing=briefing)
 
 
 def is_wolf(role: Role | str) -> bool:
@@ -187,7 +245,7 @@ def distribute_roles(total: int, *, rng: random.Random | None = None) -> list[Ro
     return roles
 
 
-def roster_summary(roles: list[Role]) -> str:
+def roster_summary(roles: list[Role], language: Language = DEFAULT_LANGUAGE) -> str:
     """Resumen público del reparto, sin decir quién tiene qué.
 
     Se anuncia al grupo para que el pueblo sepa a qué se enfrenta.
@@ -202,7 +260,7 @@ def roster_summary(roles: list[Role]) -> str:
         count = counts.get(role, 0)
         if not count:
             continue
-        details = ROLES[role]
+        details = info(role, language)
         label = details.title if count == 1 else details.plural
         parts.append(f"{details.emoji} {count} {label}")
     return "\n".join(parts)

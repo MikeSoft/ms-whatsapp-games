@@ -14,6 +14,8 @@ from collections.abc import Sequence
 
 from app.games.mentions import GroupText
 from app.games.werewolf.state import Player, by_jid, label, tagged_label
+from app.games.werewolf.texts import TEXTS
+from app.i18n import DEFAULT_LANGUAGE, Language, Texts
 
 #: Formas de apuntarse. Se comprueban tras descartar las negativas.
 _JOIN_PATTERNS = (
@@ -23,6 +25,10 @@ _JOIN_PATTERNS = (
     r"\bme\s+(apunto|uno|sumo|meto)\b",
     r"\b(entro|voy|jugar|juego|dentro|apuntame|apúntame|anotame|anótame)\b",
     r"^(si|sí|sip|claro|dale|vale|ok|okey|listo|va)$",
+    # Inglés: lo que entra se entiende en los dos idiomas siempre, juegue la
+    # mesa en el que juegue. Nadie debería quedarse fuera por contestar "me".
+    r"^(me|i am in|i'm in|im in|count me in|deal me in|join|joining|yes|yep|yeah)$",
+    r"\b(i'm in|im in|count me in|deal me in|i want to play|i'll play)\b",
     r"^(🙋|🙋‍♂️|🙋‍♀️|✋|🖐|👍|🐺|✅)+$",
 )
 
@@ -31,17 +37,27 @@ _JOIN_NEGATIVES = (
     r"\byo\s+no\b",
     r"\bno\s+(juego|puedo|entro|voy|quiero|me\s+apunto)\b",
     r"\b(paso|abstengo|luego|despues|después|otra\s+vez|mañana)\b",
+    r"\b(not me|i'm out|im out|i can't|i cant|cannot play|maybe later|"
+    r"next time|sit (this )?out|no thanks)\b",
 )
 
 _ABSTAIN_PATTERNS = (
     r"\b(paso|abstengo|nadie|ninguno|ninguna|nada|no\s+voto|blanco)\b",
+    r"\b(pass|abstain|nobody|no\s+one|none|skip|blank|no\s+vote)\b",
 )
 
-_WITCH_HEAL = (r"\b(curar|cura|curo|salvar|salvo|salva|vida|revivir|revivo)\b",)
+_WITCH_HEAL = (
+    r"\b(curar|cura|curo|salvar|salvo|salva|vida|revivir|revivo)\b",
+    r"\b(heal|save|cure|revive|life)\b",
+)
 _WITCH_POISON = (
     r"\b(veneno|envenenar|envenena|envenenado|matar|mato|muerte|asesinar|asesino)\b",
+    r"\b(poison|kill|murder|death)\b",
 )
-_WITCH_NONE = (r"\b(nada|ninguna|paso|abstengo|nadie|guardo|reservo|no\s+uso)\b",)
+_WITCH_NONE = (
+    r"\b(nada|ninguna|paso|abstengo|nadie|guardo|reservo|no\s+uso)\b",
+    r"\b(nothing|none|pass|skip|abstain|keep it|save it)\b",
+)
 
 
 #: Número de la lista de jugadores ("el 3", "voto por 3.").
@@ -203,12 +219,14 @@ def votes_breakdown(
     votes: dict[str, str],
     players: Sequence[Player],
     texto: GroupText | None = None,
+    language: Language = DEFAULT_LANGUAGE,
 ) -> str:
     """Recuento legible para anunciar al grupo.
 
     Con ``texto`` se etiqueta a los acusados en vez de nombrarlos, y las
     menciones quedan acumuladas ahí para mandarlas junto al mensaje.
     """
+    t = Texts(TEXTS, language)
     counts: dict[str, int] = {}
     for target in votes.values():
         if target:
@@ -223,5 +241,6 @@ def votes_breakdown(
             name = tagged_label(player, texto)
         else:
             name = label(player)
-        lines.append(f"• {name}: {count} voto{'s' if count != 1 else ''}")
-    return "\n".join(lines) if lines else "• nadie recibió votos"
+        clave = "vote.tally_one" if count == 1 else "vote.tally_many"
+        lines.append(t(clave, name=name, count=count))
+    return "\n".join(lines) if lines else t("vote.tally_empty")

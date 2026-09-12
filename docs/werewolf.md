@@ -16,8 +16,10 @@ and runs the daytime vote.
 - **Players**: 4 to 24
 
 > [!NOTE]
-> The bot writes in Spanish — the transcripts below are what players actually
-> see.
+> The transcript below is a game in Spanish, which is the default. With
+> `GAME_LANGUAGE=en` every message, briefing and narrated scene comes out in
+> English instead; the answers players type are understood in both languages
+> either way.
 
 ---
 
@@ -214,6 +216,7 @@ With `MANAGE_GROUP_PERMISSIONS=false` it is not even checked.
 | `WEREWOLF_TIE_BREAK` | `none` | `none` = a tie lynches nobody; `random` = chance decides |
 | `WEREWOLF_REVEAL_ROLE_ON_DEATH` | `true` | Reveal the role of whoever dies at night |
 | `MANAGE_GROUP_PERMISSIONS` | `true` | Mute the group at night |
+| `GAME_LANGUAGE` | `es` | Language everything is written in: `es` or `en` |
 
 ---
 

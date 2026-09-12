@@ -94,15 +94,3 @@ def parse_command(text: str, *, prefix: str = "#") -> Command | None:
         else:
             flags.add(flag)
     return Command(name=canonical, args=args, raw=raw, flags=frozenset(flags))
-
-
-def help_text(prefix: str = "#") -> str:
-    return (
-        "🎮 *Comandos del máster*\n\n"
-        f"`{prefix}juegos` — lista los juegos disponibles\n"
-        f"`{prefix}juego <nombre>` — inicia una partida\n"
-        f"`{prefix}juego <nombre> ia` — con narración generada por el modelo\n"
-        f"`{prefix}estado` — qué hay en marcha ahora\n"
-        f"`{prefix}cancelar` — corta la partida en curso\n"
-        f"`{prefix}ayuda` — este mensaje"
-    )

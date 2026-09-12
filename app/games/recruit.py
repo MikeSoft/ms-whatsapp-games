@@ -18,12 +18,13 @@ from dataclasses import dataclass
 
 from app.core.llm import LLMClient
 from app.games.werewolf.parsing import looks_like_join, normalise
+from app.i18n import DEFAULT_LANGUAGE, Language
 from app.logging_conf import get_logger
 from app.waha.models import InboundMessage
 
 log = get_logger("recruit")
 
-_SYSTEM = """\
+_SYSTEM_ES = """\
 Eres el asistente de un moderador de juegos por WhatsApp. Se ha abierto una
 convocatoria y la gente responde en lenguaje coloquial. Tu única tarea es
 decidir quién quiere jugar de verdad.
@@ -33,8 +34,27 @@ Entra quien confirme participar ("yo", "yo juego", "va", "me apunto", "dale",
 comente sin comprometerse, o se excluya ("yo no", "paso", "la próxima",
 "ahora no puedo").
 
+La gente puede contestar en español o en inglés; entiende las dos.
+
 Responde SÓLO con este JSON, sin texto alrededor:
 {"jugadores": [<números de los participantes que SÍ entran>]}"""
+
+_SYSTEM_EN = """\
+You assist the moderator of a game played over WhatsApp. Sign-ups are open and
+people answer in casual language. Your only job is to decide who actually
+wants to play.
+
+In goes whoever confirms they are playing ("me", "I'm in", "count me in",
+"deal me in", "🙋"). NOT in: whoever jokes, asks about the rules, says hello,
+comments without committing, or opts out ("not me", "I'm out", "next time",
+"I can't right now").
+
+People may answer in English or in Spanish; understand both.
+
+Answer ONLY with this JSON, with no text around it:
+{"jugadores": [<numbers of the participants who ARE in>]}"""
+
+_SYSTEMS: dict[str, str] = {"es": _SYSTEM_ES, "en": _SYSTEM_EN}
 
 
 @dataclass(frozen=True)
@@ -58,6 +78,17 @@ _NEGATIVE_HINTS = (
     "luego",
     "ahorita no",
     "ahora no",
+    # Inglés: lo que entra se entiende en los dos idiomas, juegue la mesa en
+    # el que juegue.
+    "not me",
+    "im out",
+    "i'm out",
+    "cant",
+    "can't",
+    "cannot play",
+    "next time",
+    "maybe later",
+    "no thanks",
 )
 
 
@@ -112,6 +143,7 @@ async def select_players(
     *,
     llm: LLMClient,
     max_players: int = 30,
+    language: Language = DEFAULT_LANGUAGE,
 ) -> list[Joiner]:
     """Devuelve los jugadores inscritos, en orden de llegada."""
     grouped = _group_by_sender(messages)
@@ -128,7 +160,7 @@ async def select_players(
         jid for jid in senders if _is_hard_no([m.text for m in grouped[jid]])
     }
 
-    llm_yes = await _ask_llm(senders, grouped, llm=llm)
+    llm_yes = await _ask_llm(senders, grouped, llm=llm, language=language)
     if llm_yes is None:
         log.info("recruit.deterministic_only", candidates=len(senders))
         chosen = regex_yes
@@ -148,6 +180,7 @@ async def _ask_llm(
     grouped: dict[str, list[InboundMessage]],
     *,
     llm: LLMClient,
+    language: Language = DEFAULT_LANGUAGE,
 ) -> set[str] | None:
     """Pide al modelo la lista de participantes. ``None`` si no se pudo usar."""
     if not llm.available:
@@ -164,7 +197,7 @@ async def _ask_llm(
         + f"\n\nDevuelve el JSON con los números (1 a {len(senders)}) de quienes SÍ entran."
     )
 
-    data = await llm.complete_json(_SYSTEM, user)
+    data = await llm.complete_json(_SYSTEMS.get(language, _SYSTEM_ES), user)
     if not data:
         return None
 

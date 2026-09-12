@@ -34,8 +34,9 @@ red; do not skip it and do not delete it.
 ## Style
 
 - 95-column lines, `ruff` with the configuration in `pyproject.toml`.
-- **Identifiers in English, comments and user-facing text in Spanish.** The
-  product is played in Spanish; the code reads as code.
+- **Identifiers and code in English, comments in Spanish.** Player-facing
+  text is not written in the code at all: it lives in the catalogues, in
+  both languages (see *Where each thing goes*).
 - Broad `except Exception` is legitimate **only at the edges** (WAHA, LLM,
   Redis, database) and always with `# noqa: BLE001` and a comment saying what
   degrades. Not in game logic.
@@ -57,6 +58,11 @@ red; do not skip it and do not delete it.
   only knows `InboundMessage`.
 - **A configurable setting** → `app/config.py` **and** `.env.example`. Both, or
   nobody will know it exists.
+- **Text a player reads** → the game's catalogue (`texts.py`), in **both**
+  languages. Never a literal in a node: the suite checks that the Spanish and
+  English catalogues have the same keys, and a hardcoded string bypasses that.
+  What players write is different — the parsers accept both languages at all
+  times, so new keywords go in with their counterpart.
 
 ## Non-negotiable rules
 

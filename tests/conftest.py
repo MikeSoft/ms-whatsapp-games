@@ -239,7 +239,9 @@ def make_context(
 # Jugadores automáticos
 # --------------------------------------------------------------------------
 
-_ROLE_LINE = re.compile(r"Tu rol es \*(.+?)\*")
+#: Los dobles leen lo que el bot escribe, así que entienden sus dos
+#: idiomas: una partida en inglés se juega igual que una en español.
+_ROLE_LINE = re.compile(r"(?:Tu rol es|Your role is) \*(.+?)\*")
 _OPTION_LINE = re.compile(r"^(\d{1,2})\.\s+(.+)$", re.MULTILINE)
 
 
@@ -271,7 +273,11 @@ class ScriptedPlayers:
     joined: bool = False
 
     def wolves(self) -> list[str]:
-        return [jid for jid, role in self.roles.items() if role == "Hombre Lobo"]
+        return [
+            jid
+            for jid, role in self.roles.items()
+            if role in {"Hombre Lobo", "Werewolf"}
+        ]
 
     @staticmethod
     def _options(text: str) -> list[tuple[int, str]]:
@@ -288,13 +294,16 @@ class ScriptedPlayers:
 
     async def on_group(self, raw: str) -> None:
         text = render_mentions(raw, self.names)
-        if "se abren las inscripciones" in text and not self.joined:
+        if ("se abren las inscripciones" in text or "sign-ups are open" in text) and (
+            not self.joined
+        ):
             self.joined = True
+            entrada = "Yo" if "se abren las inscripciones" in text else "me"
             for jid in self.jids:
-                await self._say_group(jid, "Yo")
+                await self._say_group(jid, entrada)
             return
 
-        if "EL JUICIO" in text and self.debate_lines:
+        if ("EL JUICIO" in text or "THE TRIAL" in text) and self.debate_lines:
             # Hablan todos, rotando las frases: si sólo hablaran los primeros
             # de la lista, en las rondas tardías estarían muertos y el juicio
             # quedaría mudo por accidente, no por lo que el test comprueba.
@@ -302,7 +311,7 @@ class ScriptedPlayers:
                 await self._say_group(jid, self.debate_lines[indice % len(self.debate_lines)])
             return
 
-        if "*VOTACIÓN*" in text:
+        if "*VOTACIÓN*" in text or "*VOTE*" in text:
             options = self._options(text)
             if not options:
                 return
@@ -323,22 +332,25 @@ class ScriptedPlayers:
         if not self.answer_night:
             return
 
-        if "¿A quién devoráis?" in text:
+        if "¿A quién devoráis?" in text or "Who do you devour?" in text:
             options = self._options(text)
             if options:
                 # Los lobos muerden al último de la lista.
                 await self._say(jid, str(options[-1][0]))
-        elif "¿De quién quieres conocer la identidad?" in text:
+        elif (
+            "¿De quién quieres conocer la identidad?" in text
+            or "Whose identity do you want to know?" in text
+        ):
             options = self._options(text)
             if options:
                 await self._say(jid, str(options[0][0]))
-        elif "Elige a dos jugadores" in text:
+        elif "Elige a dos jugadores" in text or "Choose two players" in text:
             options = self._options(text)
             if len(options) >= 2:
                 await self._say(jid, f"{options[0][0]} {options[1][0]}")
-        elif "Pociones que te quedan" in text:
+        elif "Pociones que te quedan" in text or "Potions you have left" in text:
             await self._say(jid, self.witch_reply)
-        elif "Acabas de morir" in text:
+        elif "Acabas de morir" in text or "You have just died" in text:
             await self._say(jid, self.hunter_reply)
 
 

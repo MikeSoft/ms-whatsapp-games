@@ -133,16 +133,17 @@ async def readiness(request: Request, response: Response) -> dict[str, Any]:
 
 
 @router.get("/games", summary="Juegos registrados")
-async def games() -> dict[str, Any]:
+async def games(request: Request) -> dict[str, Any]:
+    idioma = request.app.state.settings.game_language
     return {
         "juegos": [
             {
                 "key": spec.key,
-                "titulo": spec.title,
-                "descripcion": spec.tagline,
+                "titulo": spec.title_in(idioma),
+                "descripcion": spec.tagline_in(idioma),
                 "alias": list(spec.aliases),
                 "jugadores": spec.rango_jugadores(),
-                "como_funciona": spec.how_to,
+                "como_funciona": spec.how_to_in(idioma),
             }
             for spec in registry.specs()
         ]

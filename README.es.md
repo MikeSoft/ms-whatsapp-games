@@ -53,6 +53,7 @@ Bot     ›  🎭 6 jugadores entran a la partida
 - [Requisitos](#requisitos)
 - [Puesta en marcha](#puesta-en-marcha)
 - [Si tu WAHA ya existe](#si-tu-waha-ya-existe)
+- [Jugar en inglés](#jugar-en-inglés)
 - [Comandos](#comandos)
 - [Cómo encaja todo](#cómo-encaja-todo)
 - [Configuración](#configuración)
@@ -165,6 +166,33 @@ Tres cosas que cuestan un rato averiguar:
 
 ---
 
+## Jugar en inglés
+
+Un ajuste:
+
+```env
+GAME_LANGUAGE=en
+```
+
+Cambia **lo que sale**: los mensajes del grupo, los privados, los briefings de
+cada rol, las preguntas del concurso y el prompt del narrador — al modelo se le
+pide que escriba en inglés, así que las escenas también salen en inglés.
+
+**No** cambia lo que entra. Los parsers aceptan los dos idiomas siempre, juegue
+la mesa en el que juegue: entran igual `yo` y `me`, gastan la poción igual
+`curar` y `heal`, se abstienen igual `paso` y `pass`. En un grupo mixto nadie
+se queda fuera por contestar en el otro idioma.
+
+Los comandos tampoco se traducen: ya aceptan alias en inglés, así que
+`#game werewolf`, `#games`, `#status` y `#cancel` funcionan con cualquier
+ajuste.
+
+Una traducción que falte cae al español en vez de romper la partida; la suite
+comprueba que los dos catálogos tengan las mismas claves, así que no debería
+llegar a pasar.
+
+---
+
 ## Comandos
 
 Sólo los aceptan los números de `MANAGER_NUMBER`.
@@ -224,6 +252,7 @@ juego en su documento. Las transversales:
 |---|---|---|
 | `MANAGER_NUMBER` | *(vacío)* | Números que pueden dar órdenes, separados por comas |
 | `COMMAND_PREFIX` | `#` | Prefijo de los comandos |
+| `GAME_LANGUAGE` | `es` | Idioma en que se juega: `es` o `en` |
 | `WAHA_BASE_URL` | `http://waha:3000` | Dónde vive WAHA |
 | `WAHA_SESSION` | `default` | Qué sesión usar |
 | `WAHA_WEBHOOK_HMAC_SECRET` | *(vacío)* | Firma de los webhooks |

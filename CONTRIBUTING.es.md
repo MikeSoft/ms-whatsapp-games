@@ -34,8 +34,9 @@ explica en el PR por qué queda rojo; no lo saltes ni lo borres.
 ## Estilo
 
 - Línea de 95 columnas, `ruff` con la configuración de `pyproject.toml`.
-- **Identificadores en inglés, comentarios y textos de usuario en español.**
-  El producto se juega en español; el código se lee como código.
+- **Identificadores y código en inglés, comentarios en español.** Los textos
+  que lee un jugador no se escriben en el código: viven en los catálogos, en
+  los dos idiomas (ver *Dónde va cada cosa*).
 - Los `except Exception` amplios son legítimos **sólo en los bordes** (WAHA,
   LLM, Redis, base de datos) y siempre con `# noqa: BLE001` y un comentario que
   diga qué se degrada. En la lógica del juego, no.
@@ -58,6 +59,12 @@ explica en el PR por qué queda rojo; no lo saltes ni lo borres.
   código sólo conoce `InboundMessage`.
 - **Un ajuste configurable** → `app/config.py` **y** `.env.example`. Los dos, o
   nadie sabrá que existe.
+- **Un texto que lee un jugador** → el catálogo del juego (`texts.py`), en
+  **los dos idiomas**. Nunca un literal dentro de un nodo: la suite comprueba
+  que los catálogos español e inglés tengan las mismas claves, y una cadena
+  suelta se salta esa red. Lo que escriben los jugadores es distinto: los
+  parsers aceptan los dos idiomas siempre, así que una palabra clave nueva
+  entra con su equivalente.
 
 ## Reglas que no se negocian
 

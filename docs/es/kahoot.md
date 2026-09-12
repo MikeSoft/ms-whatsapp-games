@@ -230,6 +230,7 @@ tanda entera, no la última pregunta.
 | `KAHOOT_MAX_SECONDS` | `120` | Tope de la ventana |
 | `KAHOOT_LOCK_GROUP` | `true` | Silenciar el grupo mientras se juega |
 | `KAHOOT_HARDEN` | `true` | Segunda pasada de revisión (otra llamada al modelo) |
+| `GAME_LANGUAGE` | `es` | Idioma en que se escriben las preguntas: `es` o `en` |
 
 ---
 
